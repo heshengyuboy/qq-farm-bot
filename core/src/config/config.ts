@@ -40,7 +40,7 @@ interface RuntimeConfig extends SystemConfig {
 // ============ 设备预设 ============
 
 // clientVersion 由 CONFIG.clientVersion 动态获取，不写死在预设中
-const DEFAULT_CLIENT_VERSION = '1.13.0.5_20260723';
+const DEFAULT_CLIENT_VERSION = '1.13.1.6_20260723';
 
 const DEVICE_PRESETS: DevicePreset[] = [
     {

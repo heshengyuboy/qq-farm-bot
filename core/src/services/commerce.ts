@@ -152,6 +152,9 @@ async function getMysteryShop(): Promise<any> {
         return { active: false, serverTime: getServerTimeSec() * 1000, npc: null };
     }
     const currencyId = Math.max(0, toNum(npc.currency_item_id));
+    const rewardCount = Math.max(0, toNum(npc.reward_count));
+    const unitPrice = Math.max(0, toNum(npc.price));
+    const unitOriginalPrice = Math.max(0, toNum(npc.original_price));
     const balances = await currencyBalances([currencyId]);
     return {
         active: true,
@@ -160,17 +163,51 @@ async function getMysteryShop(): Promise<any> {
         expireTime: Math.max(0, toNum(reply.expire_time)) * 1000,
         npc: {
             id: Math.max(0, toNum(npc.npc_id)),
-            reward: itemDto({ id: npc.reward_item_id, count: npc.reward_count }, '神秘商品'),
+            reward: itemDto({ id: npc.reward_item_id, count: rewardCount }, '神秘商品'),
             stock: Math.max(0, toNum(npc.stock_count)),
-            price: { ...itemDto({ id: currencyId, count: npc.price }), balance: balances[String(currencyId)] ?? null },
-            originalPrice: Math.max(0, toNum(npc.original_price)),
+            price: { ...itemDto({ id: currencyId, count: unitPrice * rewardCount }), balance: balances[String(currencyId)] ?? null },
+            originalPrice: unitOriginalPrice * rewardCount,
+            unitPrice,
+            unitOriginalPrice,
             discountPercent: Math.max(0, toNum(npc.discount_percent)),
         },
     };
+}
+
+async function purchaseMysteryOffer(npcIdInput: unknown): Promise<any> {
+    const npcId = positiveInteger(npcIdInput, 'INVALID_MYSTERY_NPC_ID', 'npcId');
+    return serializePurchase(async () => {
+        const before = await getMysteryShop();
+        const offer = before.npc;
+        if (!before.active || !offer || offer.id !== npcId) {
+            throw businessError('MYSTERY_OFFER_STALE', 'Mystery shop offer is no longer available');
+        }
+        if (offer.stock <= 0) throw businessError('MYSTERY_OFFER_SOLD_OUT', 'Mystery shop offer is sold out');
+        if (offer.price.balance !== null && offer.price.balance < offer.price.count) {
+            throw businessError('INSUFFICIENT_BALANCE', 'Insufficient currency balance');
+        }
+
+        await mysteryShopService.buy(npcId);
+        const shop = await getMysteryShop();
+        if (shop.active && shop.npc?.id === npcId && shop.npc.stock >= offer.stock) {
+            throw businessError('MYSTERY_PURCHASE_NOT_CONFIRMED', 'Mystery shop purchase was not confirmed');
+        }
+        return {
+            purchase: {
+                npcId,
+                reward: offer.reward,
+                price: offer.price,
+                originalPrice: offer.originalPrice,
+                discountPercent: offer.discountPercent,
+            },
+            shop,
+        };
+    });
 }
 
 module.exports = {
     getMallCatalog,
     purchaseMallProduct,
     getMysteryShop,
+    purchaseMysteryOffer,
 };

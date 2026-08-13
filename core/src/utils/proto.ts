@@ -140,6 +140,7 @@ async function loadProto(): Promise<void> {
     types.GetActiveNPCRequest = root.lookupType('gamepb.mysteryshoppb.GetActiveNPCRequest');
     types.GetActiveNPCReply = root.lookupType('gamepb.mysteryshoppb.GetActiveNPCReply');
     types.ActiveMysteryShopNPC = root.lookupType('gamepb.mysteryshoppb.ActiveNPC');
+    types.MysteryShopBuyRequest = root.lookupType('gamepb.mysteryshoppb.BuyRequest');
     types.GetDailyGiftStatusRequest = root.lookupType('gamepb.qqvippb.GetDailyGiftStatusRequest');
     types.GetDailyGiftStatusReply = root.lookupType('gamepb.qqvippb.GetDailyGiftStatusReply');
     types.ClaimDailyGiftRequest = root.lookupType('gamepb.qqvippb.ClaimDailyGiftRequest');
@@ -219,6 +220,10 @@ async function loadProto(): Promise<void> {
     types.ExchangeShopOperateParams = root.lookupType('gamepb.activitypb.ExchangeShopOperateParams');
     types.ExchangeShopRequest = root.lookupType('gamepb.activitypb.ExchangeShopRequest');
     types.OperateConstellationRequest = root.lookupType('gamepb.activitypb.OperateConstellationRequest');
+    types.ClaimQingMeiDailySeedRequest = root.lookupType('gamepb.activitypb.ClaimQingMeiDailySeedRequest');
+    types.StartQingMeiBrewRequest = root.lookupType('gamepb.activitypb.StartQingMeiBrewRequest');
+    types.ContinueQingMeiBrewRequest = root.lookupType('gamepb.activitypb.ContinueQingMeiBrewRequest');
+    types.SettleQingMeiBrewRequest = root.lookupType('gamepb.activitypb.SettleQingMeiBrewRequest');
     types.ActivityOperateReply = root.lookupType('gamepb.activitypb.ActivityOperateReply');
     types.GetSeasonInfoRequest = root.lookupType('gamepb.seasonpb.GetSeasonInfoRequest');
     types.GetSeasonInfoReply = root.lookupType('gamepb.seasonpb.GetSeasonInfoReply');

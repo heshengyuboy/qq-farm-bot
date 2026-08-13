@@ -208,15 +208,59 @@ export interface ActivityActionsDto {
   exchange: ActivityActionDto
 }
 
+export interface QingMeiQuoteDto {
+  round: number
+  unitPrice: string
+  totalGold: string
+  doubled: boolean
+}
+
+export interface QingMeiIngredientDto extends ActivityItemDto {
+  uid: string
+  key: string
+  mutantTypes: string[]
+}
+
+export interface QingMeiActivityDto {
+  activityId: string
+  name: string
+  title: string
+  startTime: number | null
+  endTime: number | null
+  rules: ActivityRulesDto
+  ingredient: ActivityItemDto
+  ingredients: QingMeiIngredientDto[]
+  balance: string | null
+  balanceKnown: boolean
+  baseGold: string
+  basePrice: string
+  guaranteedPrice: string
+  currentRound: number
+  started: boolean
+  maxRounds: number
+  finished: boolean
+  quotePrices: string[]
+  quoteTotals: string[]
+  quote: QingMeiQuoteDto | null
+  dailySeed: { claimed: boolean, grantId: string, reward: ActivityItemDto } | null
+  actions: {
+    claimSeed: ActivityActionDto
+    start: ActivityActionDto
+    continue: ActivityActionDto
+    settle: ActivityActionDto
+  }
+}
+
 export interface ActivityCenterSnapshotDto {
   season: SeasonDto | null
   shop: ShopDto | null
   solarTerms: SolarTermsDto | null
   constellation: ConstellationDto | null
+  qingMei: QingMeiActivityDto | null
   actions: ActivityActionsDto
 }
 
-export type ActivityMutationKey = 'claimPass' | 'lightConstellation' | 'claimSolar' | 'exchange'
+export type ActivityMutationKey = 'claimPass' | 'lightConstellation' | 'claimSolar' | 'exchange' | 'claimQingMeiSeed' | 'startQingMeiBrew' | 'continueQingMeiBrew' | 'settleQingMeiBrew'
 
 function isRecord(value: unknown): value is ActivityRecord {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -598,6 +642,63 @@ function normalizeSolarTerms(value: unknown): SolarTermsDto | null {
   }
 }
 
+function normalizeQingMei(value: unknown): QingMeiActivityDto | null {
+  if (!isRecord(value))
+    return null
+  const raw = value
+  const actions = record(raw.actions)
+  const dailySeedRaw = record(raw.dailySeed)
+  const quoteRaw = record(raw.quote)
+  const action = (key: string) => normalizeAction(actions, {}, [key])
+  return {
+    activityId: text(raw.activityId, raw.activity_id),
+    name: text(raw.name, '青酿换万金'),
+    title: text(raw.title, raw.name, '青酿换万金'),
+    startTime: toMilliseconds(first(raw.startTime, raw.start_time)),
+    endTime: toMilliseconds(first(raw.endTime, raw.end_time)),
+    rules: normalizeRules(raw.rules),
+    ingredient: normalizeItem(raw.ingredient),
+    ingredients: records(raw.ingredients).map((entry) => {
+      const uid = text(entry.uid)
+      const mutantTypes = Array.isArray(entry.mutantTypes) ? entry.mutantTypes.map(String) : []
+      return {
+        ...normalizeItem(entry),
+        uid,
+        key: text(entry.key, `${uid}:${mutantTypes.join(',')}`),
+        mutantTypes,
+      }
+    }),
+    balance: raw.balance === null || raw.balance === undefined ? null : text(raw.balance),
+    balanceKnown: bool(raw.balanceKnown),
+    baseGold: text(raw.baseGold),
+    basePrice: text(raw.basePrice),
+    guaranteedPrice: text(raw.guaranteedPrice),
+    currentRound: finiteNumber(raw.currentRound) || 0,
+    started: bool(raw.started),
+    maxRounds: finiteNumber(raw.maxRounds) || 3,
+    finished: bool(raw.finished),
+    quotePrices: Array.isArray(raw.quotePrices) ? raw.quotePrices.map(String) : [],
+    quoteTotals: Array.isArray(raw.quoteTotals) ? raw.quoteTotals.map(String) : [],
+    quote: Object.keys(quoteRaw).length ? {
+      round: finiteNumber(quoteRaw.round) || 0,
+      unitPrice: text(quoteRaw.unitPrice),
+      totalGold: text(quoteRaw.totalGold),
+      doubled: bool(quoteRaw.doubled),
+    } : null,
+    dailySeed: Object.keys(dailySeedRaw).length ? {
+      claimed: bool(dailySeedRaw.claimed),
+      grantId: text(dailySeedRaw.grantId),
+      reward: normalizeItem(dailySeedRaw.reward),
+    } : null,
+    actions: {
+      claimSeed: action('claimSeed'),
+      start: action('start'),
+      continue: action('continue'),
+      settle: action('settle'),
+    },
+  }
+}
+
 function findAction(source: ActivityRecord, aliases: string[]): unknown {
   for (const alias of aliases) {
     if (source[alias] !== undefined)
@@ -651,6 +752,7 @@ export function normalizeActivitySnapshot(value: unknown): ActivityCenterSnapsho
     shop: normalizeShop(first(root.shop, root.starSandShop, root.star_sand_shop)),
     solarTerms: normalizeSolarTerms(first(root.solarTerms, root.solar_terms, root.solar)),
     constellation: normalizeConstellation(first(root.constellation, root.constellationActivity, seasonRecord.constellation, seasonRecord.constellationActivity, seasonRecord.starContract, seasonRecord.contract)),
+    qingMei: normalizeQingMei(first(root.qingMei, root.qingmei, root.qing_mei)),
     actions: {
       claimPass: normalizeAction(actionsRaw, capabilitiesRaw, ['claimPass', 'passClaim', 'pass_claim']),
       lightConstellation: normalizeAction(actionsRaw, capabilitiesRaw, ['lightConstellation', 'constellationLight', 'constellation_light']),
@@ -729,6 +831,10 @@ export const useActivityCenterStore = defineStore('activity-center', () => {
     lightConstellation: false,
     claimSolar: false,
     exchange: false,
+    claimQingMeiSeed: false,
+    startQingMeiBrew: false,
+    continueQingMeiBrew: false,
+    settleQingMeiBrew: false,
   })
 
   const season = computed(() => snapshot.value.season)
@@ -736,6 +842,7 @@ export const useActivityCenterStore = defineStore('activity-center', () => {
   const solarTerms = computed(() => snapshot.value.solarTerms)
   const solar = solarTerms
   const constellation = computed(() => snapshot.value.constellation)
+  const qingMei = computed(() => snapshot.value.qingMei)
   const actions = computed(() => snapshot.value.actions)
   const serverNow = computed(() => Date.now() + serverClockOffset.value)
   const tabBadges = computed<Partial<Record<ActivityTabKey, boolean>>>(() => ({
@@ -753,7 +860,7 @@ export const useActivityCenterStore = defineStore('activity-center', () => {
     notice.value = ''
     loadedAccountId.value = ''
     serverClockOffset.value = 0
-    pendingActions.value = { claimPass: false, lightConstellation: false, claimSolar: false, exchange: false }
+    pendingActions.value = { claimPass: false, lightConstellation: false, claimSolar: false, exchange: false, claimQingMeiSeed: false, startQingMeiBrew: false, continueQingMeiBrew: false, settleQingMeiBrew: false }
   }
 
   function isCurrent(version: number, accountId: string) {
@@ -890,6 +997,22 @@ export const useActivityCenterStore = defineStore('activity-center', () => {
     return mutate('exchange', '/shop/exchange', accountId, { goodsId, count })
   }
 
+  function claimQingMeiDailySeed(accountId: string) {
+    return mutate('claimQingMeiSeed', '/qingmei/daily-seed/claim', accountId)
+  }
+
+  function startQingMeiBrew(accountId: string, ingredients: Array<{ uid: string, count: number }>) {
+    return mutate('startQingMeiBrew', '/qingmei/brew/start', accountId, { ingredients })
+  }
+
+  function continueQingMeiBrew(accountId: string) {
+    return mutate('continueQingMeiBrew', '/qingmei/brew/continue', accountId)
+  }
+
+  function settleQingMeiBrew(accountId: string) {
+    return mutate('settleQingMeiBrew', '/qingmei/brew/settle', accountId)
+  }
+
   function lazyLoad(accountId: string) {
     return load(accountId, false)
   }
@@ -905,6 +1028,7 @@ export const useActivityCenterStore = defineStore('activity-center', () => {
     solar,
     solarTerms,
     constellation,
+    qingMei,
     actions,
     tabBadges,
     loading,
@@ -921,6 +1045,10 @@ export const useActivityCenterStore = defineStore('activity-center', () => {
     lightConstellation,
     claimSolarTerm,
     exchangeStarSandGoods,
+    claimQingMeiDailySeed,
+    startQingMeiBrew,
+    continueQingMeiBrew,
+    settleQingMeiBrew,
     reset,
   }
 })

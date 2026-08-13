@@ -3,9 +3,12 @@
  */
 
 const { CONFIG } = require('../../config/config');
+const crypto = require('node:crypto');
 const { getUserState, networkEvents } = require('../../utils/network');
 const { toNum, getServerTimeSec, log, logWarn, randomDelay } = require('../../utils/utils');
+const { getDataFile } = require('../../config/runtime-paths');
 const { createScheduler } = require('../scheduler');
+const { readJsonFile, writeJsonFileAtomic } = require('../json-db');
 const { setOperationLimitsCallback } = require('../farm');
 const {
     isAutomationOn,
@@ -43,39 +46,67 @@ let helpAutoDisabledByLimit: boolean = false;
 let badExecutedOnStartup: boolean = false;
 let badOperationLimitReached: boolean = false;
 
+// Captured PutWeeds/PutInsects replies both consume operation 10003.
+// PutInsects additionally reports 10004, but 10003 is the shared daily quota.
+const BAD_SHARED_LIMIT_ID: number = 10003;
+const BAD_DAILY_STATE_VERSION: number = 1;
+
 const OP_NAMES: Record<number, string> = {
     10001: '浇水',
     10002: '除虫',
-    10003: '除草',
-    10004: '偷菜',
-    10005: '放虫',
-    10006: '放草',
-    10007: '收获',
+    10003: '捣乱共享额度',
+    10004: '放虫',
+    10005: '帮助操作 #10005',
+    10006: '帮助操作 #10006',
+    10007: '帮助操作 #10007',
     10008: '铲除',
 };
 
 // ============ 操作限制相关 ============
 
+function getBeijingDateKey(): string {
+    const nowSec: number = getServerTimeSec();
+    const nowMs: number = nowSec > 0 ? nowSec * 1000 : Date.now();
+    const bjDate: Date = new Date(nowMs + 8 * 3600 * 1000);
+    const y: number = bjDate.getUTCFullYear();
+    const m: string = String(bjDate.getUTCMonth() + 1).padStart(2, '0');
+    const d: string = String(bjDate.getUTCDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+}
+
+function getBadDailyStateFile(): string {
+    const accountId: string = String(process.env.FARM_ACCOUNT_ID || 'default');
+    const token: string = crypto.createHash('sha256').update(accountId, 'utf8').digest('hex');
+    return getDataFile(`friend-bad-state-${token}.json`);
+}
+
+function loadBadDailyStop(today: string): boolean {
+    const state: any = readJsonFile(getBadDailyStateFile(), () => ({}));
+    return Number(state?.version) === BAD_DAILY_STATE_VERSION
+        && String(state?.date || '') === today
+        && state?.stopped === true;
+}
+
+function persistBadDailyStop(today: string): void {
+    writeJsonFileAtomic(getBadDailyStateFile(), {
+        version: BAD_DAILY_STATE_VERSION,
+        date: today,
+        stopped: true,
+    });
+}
+
 /**
  * 检查是否需要重置每日限制 (0点刷新)
  */
 export function checkDailyReset(): void {
-    // 使用服务器时间（北京时间 UTC+8）计算当前日期，避免时区偏差
-    const nowSec: number = getServerTimeSec();
-    const nowMs: number = nowSec > 0 ? nowSec * 1000 : Date.now();
-    const bjOffset: number = 8 * 3600 * 1000;
-    const bjDate: Date = new Date(nowMs + bjOffset);
-    const y: number = bjDate.getUTCFullYear();
-    const m: string = String(bjDate.getUTCMonth() + 1).padStart(2, '0');
-    const d: string = String(bjDate.getUTCDate()).padStart(2, '0');
-    const today: string = `${y}-${m}-${d}`;  // 北京时间日期 YYYY-MM-DD
+    const today: string = getBeijingDateKey();
     if (lastResetDate !== today) {
         if (lastResetDate !== '') {
             log('系统', '跨日重置，清空操作限制缓存');
         }
         operationLimits.clear();
         canGetHelpExp = true;
-        badOperationLimitReached = false;
+        badOperationLimitReached = loadBadDailyStop(today);
         if (helpAutoDisabledByLimit) {
             helpAutoDisabledByLimit = false;
             log('好友', '新的一天已开始，自动恢复帮忙操作功能', {
@@ -97,6 +128,11 @@ export function markBadOperationLimitReached(method: string = ''): boolean {
     checkDailyReset();
     if (badOperationLimitReached) return false;
     badOperationLimitReached = true;
+    try {
+        persistBadDailyStop(lastResetDate || getBeijingDateKey());
+    } catch (e: any) {
+        logWarn('好友', `保存当日捣乱停用状态失败: ${e.message}`);
+    }
     log('好友', '今日放虫/放草次数已达上限，停止两类操作', {
         module: 'friend',
         event: '放虫放草次数上限',
@@ -134,6 +170,9 @@ export function updateOperationLimits(limits: any[]): void {
                 dayExpTimesLimit: toNum(limit.day_ex_times_lt), // 协议字段名为 day_ex_times_lt
             };
             operationLimits.set(id, data);
+            if (id === BAD_SHARED_LIMIT_ID && data.dayTimesLimit > 0 && data.dayTimes >= data.dayTimesLimit) {
+                markBadOperationLimitReached('operation_limit');
+            }
         }
     }
 }
@@ -161,7 +200,7 @@ export function canGetExp(opId: number): boolean {
  */
 export function canOperate(opId: number): boolean {
     checkDailyReset();
-    if ((opId === 10005 || opId === 10006) && badOperationLimitReached) return false;
+    if ((opId === BAD_SHARED_LIMIT_ID || opId === 10004) && badOperationLimitReached) return false;
     const limit: any = operationLimits.get(opId);
     if (!limit) return true;
     if (limit.dayTimesLimit <= 0) return true;
@@ -173,8 +212,16 @@ export function canOperate(opId: number): boolean {
  */
 export function getRemainingTimes(opId: number): number {
     checkDailyReset();
-    if ((opId === 10005 || opId === 10006) && badOperationLimitReached) return 0;
+    if ((opId === BAD_SHARED_LIMIT_ID || opId === 10004) && badOperationLimitReached) return 0;
     const limit: any = operationLimits.get(opId);
+    if (!limit || limit.dayTimesLimit <= 0) return 999;
+    return Math.max(0, limit.dayTimesLimit - limit.dayTimes);
+}
+
+export function getRemainingBadOperationTimes(): number {
+    checkDailyReset();
+    if (badOperationLimitReached) return 0;
+    const limit: any = operationLimits.get(BAD_SHARED_LIMIT_ID);
     if (!limit || limit.dayTimesLimit <= 0) return 999;
     return Math.max(0, limit.dayTimesLimit - limit.dayTimes);
 }
@@ -298,8 +345,6 @@ export async function checkFriends(options: CheckFriendsOptions = {}): Promise<b
             // });
 
             for (const friend of stealFriends) {
-                if (!canOperate(10004)) break; // 偷菜次数用完
-
                 try {
                     await visitFriendForSteal(friend, totalActions, state.gid, state.accountId);
                 } catch {
@@ -391,9 +436,7 @@ export async function checkFriends(options: CheckFriendsOptions = {}): Promise<b
                     if (isBadOperationLimitReached()) break;
 
                     // 检查是否还有捣乱次数
-                    const canPutBug: boolean = canOperate(10005);
-                    const canPutWeed: boolean = canOperate(10006);
-                    if (!canPutBug && !canPutWeed) {
+                    if (getRemainingBadOperationTimes() <= 0) {
                         log('好友', `放虫放草次数已用完，停止执行`, { module: 'friend', event: '放虫放草次数用完' });
                         break;
                     }
@@ -608,9 +651,7 @@ export async function runBadOnceOnStartup(): Promise<void> {
             if (isBadOperationLimitReached()) break;
 
             // 检查是否还有捣乱次数
-            const canPutBug: boolean = canOperate(10005);
-            const canPutWeed: boolean = canOperate(10006);
-            if (!canPutBug && !canPutWeed) {
+            if (getRemainingBadOperationTimes() <= 0) {
                 log('好友', `放虫放草次数已用完，停止执行。已处理 ${processedCount} 个好友`, { module: 'friend', event: '放虫放草次数用完', processedCount });
                 break;
             }

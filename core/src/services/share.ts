@@ -3,7 +3,7 @@ export {};
  * 每日分享礼包
  */
 
-const { sendMsgAsync } = require('../utils/network');
+const { sendMsgAsync, sendMsgNoReply } = require('../utils/network');
 const { types } = require('../utils/proto');
 const { log } = require('../utils/utils');
 
@@ -49,7 +49,7 @@ async function getInviteInfo(): Promise<any> {
 
 async function reportShare(): Promise<void> {
     const body: Uint8Array = types.ReportShareRequest.encode(types.ReportShareRequest.create({
-        field_1: true,
+        field_1: 1,
         field_4: 42,
     })).finish();
     const { body: replyBody } = await sendMsgAsync('gamepb.sharepb.ShareService', 'ReportShare', body);
@@ -62,6 +62,14 @@ async function claimShareReward(): Promise<any> {
     })).finish();
     const { body: replyBody } = await sendMsgAsync('gamepb.sharepb.ShareService', 'ClaimShareReward', body);
     return types.ClaimShareRewardReply.decode(replyBody);
+}
+
+async function reportActivityShare(source: number, scene: number): Promise<void> {
+    const body: Uint8Array = types.ReportShareRequest.encode(types.ReportShareRequest.create({
+        field_1: source,
+        field_4: scene,
+    })).finish();
+    await sendMsgNoReply('gamepb.sharepb.ShareService', 'ReportShare', body);
 }
 
 async function checkDailyShareStatus(force: boolean = false): Promise<boolean> {
@@ -123,6 +131,7 @@ async function checkDailyShareStatus(force: boolean = false): Promise<boolean> {
 
 module.exports = {
     checkDailyShareStatus,
+    reportActivityShare,
     getInviteInfo,
     getShareDailyState: () => ({
         key: DAILY_KEY,

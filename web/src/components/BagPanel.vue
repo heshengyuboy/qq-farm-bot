@@ -17,7 +17,7 @@ const { currentAccountId, currentAccount } = storeToRefs(accountStore)
 const { items, loading: bagLoading, originalItems } = storeToRefs(bagStore)
 const { status, loading: statusLoading, error: statusError, realtimeConnected } = storeToRefs(statusStore)
 
-const imageErrors = ref<Record<string | number, boolean>>({})
+const imageErrors = ref<Record<string, boolean>>({})
 
 const CATEGORY_OPTIONS = [
   { label: '全部', value: 'all' },
@@ -65,11 +65,19 @@ const confirmModal = ref({
   loading: false,
   action: '' as 'sell' | 'use' | 'batchSell',
   item: null as any,
+  useCount: 1,
   selectedItems: [] as any[],
 })
 
+const maxUseCount = computed(() => Math.max(1, Number(confirmModal.value.item?.count || 1)))
+
+function setUseCount(value: unknown) {
+  const count = Math.trunc(Number(value) || 1)
+  confirmModal.value.useCount = Math.max(1, Math.min(count, maxUseCount.value))
+}
+
 const batchMode = ref(false)
-const selectedForBatch = ref<Set<number>>(new Set())
+const selectedForBatch = ref<Set<string>>(new Set())
 const batchSellResult = ref<{ gold: number, goldBean: number } | null>(null)
 
 const selectedSellableCount = computed(() => {
@@ -87,7 +95,15 @@ function getPriceClass(item: any) {
 
 function canSell(item: any) {
   const itemType = Number(item?.itemType || 0)
-  return itemType === 17 || itemType === 6
+  return (itemType === 17 || itemType === 6) && item?.sellable === true
+}
+
+function getSellStatusText(item: any) {
+  if (canSell(item))
+    return '可出售'
+  if (item?.sellStatus === 'conditional')
+    return '条件出售'
+  return '不可出售'
 }
 
 function canBatchSell(item: any) {
@@ -99,14 +115,19 @@ function canUse(item: any) {
   return itemType === 11
 }
 
+function itemKey(item: any) {
+  return String(item?.key || item?.groupKey || item?.id || '')
+}
+
 function handleSellClick(item: any) {
   if (batchMode.value) {
-    const isSelected = selectedForBatch.value.has(Number(item.id))
+    const key = itemKey(item)
+    const isSelected = selectedForBatch.value.has(key)
     if (isSelected) {
-      selectedForBatch.value.delete(Number(item.id))
+      selectedForBatch.value.delete(key)
     }
     else {
-      selectedForBatch.value.add(Number(item.id))
+      selectedForBatch.value.add(key)
     }
     return
   }
@@ -127,6 +148,7 @@ function handleSellClick(item: any) {
     loading: false,
     action: 'sell',
     item,
+    useCount: 1,
     selectedItems: [],
   }
 }
@@ -134,18 +156,19 @@ function handleSellClick(item: any) {
 function handleUseClick(item: any) {
   confirmModal.value = {
     show: true,
-    title: '确认使用',
-    message: `确定要使用全部 ${item.name || `物品${item.id}`} 吗?\n数量：${item.count || 0}`,
+    title: `使用${item.name || `物品${item.id}`}`,
+    message: `当前拥有 ${item.count || 0} 个，请选择本次使用数量。`,
     type: 'primary',
     loading: false,
     action: 'use',
     item,
+    useCount: 1,
     selectedItems: [],
   }
 }
 
 async function handleConfirm() {
-  const { action, item, selectedItems } = confirmModal.value
+  const { action, item, selectedItems, useCount } = confirmModal.value
   if (!currentAccountId.value)
     return
 
@@ -153,7 +176,7 @@ async function handleConfirm() {
   try {
     if (action === 'sell' && item) {
       const sellItems = originalItems.value
-        .filter((it: any) => Number(it.id) === Number(item.id))
+        .filter((it: any) => itemKey(it) === itemKey(item))
         .map((it: any) => ({ id: it.id, count: it.count, uid: it.uid || 0 }))
 
       if (sellItems.length === 0) {
@@ -171,9 +194,7 @@ async function handleConfirm() {
       }
     }
     else if (action === 'batchSell' && selectedItems) {
-      const itemsToSell = originalItems.value
-        .filter((it: any) => selectedItems.some((si: any) => Number(si.id) === Number(it.id)))
-        .map((it: any) => ({ id: it.id, count: it.count, uid: it.uid || 0 }))
+      const itemsToSell = selectedItems.map((it: any) => ({ id: it.id, count: it.count, uid: it.uid || 0 }))
 
       if (itemsToSell.length === 0) {
         toastStore.error('未找到可出售的物品')
@@ -185,10 +206,10 @@ async function handleConfirm() {
         let totalGold = 0
         let totalGoldBean = 0
         for (const si of selectedItems) {
-          const fi = filteredItems.value.find((f: any) => Number(f.id) === Number(si.id))
+          const fi = filteredItems.value.find((f: any) => itemKey(f) === itemKey(si))
           if (fi) {
             const price = Number(fi.price) || 0
-            const count = Number(fi.count) || 0
+            const count = Number(si.count) || 0
             const priceId = Number(fi.priceId) || 0
             if (priceId === 1005) {
               totalGoldBean += price * count
@@ -209,9 +230,10 @@ async function handleConfirm() {
       }
     }
     else if (action === 'use' && item) {
-      const res = await bagStore.useItem(currentAccountId.value, Number(item.id), Number(item.count || 1))
+      const count = Math.max(1, Math.min(Math.trunc(Number(useCount) || 1), Number(item.count || 1)))
+      const res = await bagStore.useItem(currentAccountId.value, Number(item.id), count, Number(item.uid) || 0)
       if (res.ok) {
-        toastStore.success(`已使用 ${item.name || `物品${item.id}`}`)
+        toastStore.success(`已使用 ${item.name || `物品${item.id}`} x${count}`)
         await loadBag()
       }
       else {
@@ -244,7 +266,7 @@ function selectAllSellable() {
   selectedForBatch.value.clear()
   for (const item of filteredItems.value) {
     if (canBatchSell(item)) {
-      selectedForBatch.value.add(Number(item.id))
+      selectedForBatch.value.add(itemKey(item))
     }
   }
 }
@@ -262,16 +284,15 @@ function handleBatchSellClick() {
   }
 
   const itemsToSell = originalItems.value
-    .filter((it: any) => selectedList.includes(Number(it.id)))
-    .map((it: any) => ({ id: it.id, count: it.count, uid: it.uid || 0 }))
+    .filter((it: any) => selectedList.includes(itemKey(it)))
 
   let totalGold = 0
   let totalGoldBean = 0
   for (const it of itemsToSell) {
-    const item = filteredItems.value.find((f: any) => Number(f.id) === Number(it.id))
+    const item = filteredItems.value.find((f: any) => itemKey(f) === itemKey(it))
     if (item) {
       const price = Number(item.price) || 0
-      const count = Number(item.count) || 0
+      const count = Number(it.count) || 0
       const priceId = Number(item.priceId) || 0
       if (priceId === 1005) {
         totalGoldBean += price * count
@@ -300,6 +321,7 @@ function handleBatchSellClick() {
     loading: false,
     action: 'batchSell',
     item: null,
+    useCount: 1,
     selectedItems: itemsToSell,
   }
 }
@@ -429,11 +451,11 @@ useIntervalFn(loadBag, 60000)
       <div class="grid grid-cols-2 gap-4 lg:grid-cols-5 md:grid-cols-4 sm:grid-cols-3 xl:grid-cols-6">
         <div
           v-for="item in filteredItems"
-          :key="item.id"
+          :key="itemKey(item)"
           class="farm-card group relative flex flex-col items-center rounded-xl p-3 transition"
           :class="{
-            'ring-2 ring-orange-500 dark:ring-orange-400': batchMode && selectedForBatch.has(Number(item.id)),
-            'opacity-50': batchMode && canBatchSell(item) && !selectedForBatch.has(Number(item.id)),
+            'ring-2 ring-orange-500 dark:ring-orange-400': batchMode && selectedForBatch.has(itemKey(item)),
+            'opacity-50': batchMode && canBatchSell(item) && !selectedForBatch.has(itemKey(item)),
           }"
           @click="batchMode && canBatchSell(item) && handleSellClick(item)"
         >
@@ -454,7 +476,7 @@ useIntervalFn(loadBag, 60000)
               <button
                 v-if="canUse(item)"
                 class="cartoon-btn rounded-lg bg-green-500 px-1.5 py-0.5 text-[10px] text-white opacity-70 transition dark:bg-green-600 hover:opacity-100"
-                title="使用全部"
+                title="选择使用数量"
                 @click.stop="handleUseClick(item)"
               >
                 用
@@ -463,11 +485,11 @@ useIntervalFn(loadBag, 60000)
             <div
               v-else-if="canBatchSell(item)"
               class="h-5 w-5 flex items-center justify-center border-2 rounded-lg transition"
-              :class="selectedForBatch.has(Number(item.id))
+              :class="selectedForBatch.has(itemKey(item))
                 ? 'border-orange-500 bg-orange-500 text-white'
                 : 'border-gray-300 bg-white dark:border-gray-600 dark:bg-gray-700'"
             >
-              <span v-if="selectedForBatch.has(Number(item.id))" class="text-xs font-bold">✓</span>
+              <span v-if="selectedForBatch.has(itemKey(item))" class="text-xs font-bold">✓</span>
             </div>
           </div>
 
@@ -477,12 +499,12 @@ useIntervalFn(loadBag, 60000)
             style="background: color-mix(in srgb, var(--theme-bg, #fff) 90%, var(--theme-primary, #3b82f6))"
           >
             <img
-              v-if="item.image && !imageErrors[item.id]"
+              v-if="item.image && !imageErrors[itemKey(item)]"
               :src="item.image"
               :alt="item.name"
               class="max-h-full max-w-full object-contain"
               loading="lazy"
-              @error="imageErrors[item.id] = true"
+              @error="imageErrors[itemKey(item)] = true"
             >
             <div v-else class="text-2xl text-gray-400 font-bold uppercase">
               {{ (item.name || '物').slice(0, 1) }}
@@ -495,6 +517,7 @@ useIntervalFn(loadBag, 60000)
 
           <div class="mb-2 flex flex-col items-center gap-0.5 text-xs text-gray-400">
             <span v-if="item.uid">UID: {{ item.uid }}</span>
+            <span v-if="item.mutantTypes?.length">变异类型: {{ item.mutantTypes.join(' + ') }}</span>
             <span>
               <span
                 class="inline-block rounded-md px-1.5 py-0.5 text-[10px] font-bold"
@@ -509,6 +532,11 @@ useIntervalFn(loadBag, 60000)
               <span v-if="item.level > 0"> · Lv{{ item.level }}</span>
               <span v-if="item.price > 0" :class="getPriceClass(item)"> · {{ item.price }}{{ item.priceUnit || '金' }}</span>
             </span>
+            <span
+              v-if="getItemCategory(item) === 'fruit'"
+              :class="canSell(item) ? 'text-green-500 dark:text-green-400' : 'text-gray-400 dark:text-gray-500'"
+              :title="item.sellCondition || ''"
+            >{{ getSellStatusText(item) }}</span>
           </div>
 
           <div class="mt-auto font-medium" :class="item.hoursText ? 'text-blue-500' : 'text-gray-600 dark:text-gray-300'">
@@ -527,7 +555,30 @@ useIntervalFn(loadBag, 60000)
       :confirm-text="confirmModal.action === 'sell' ? '确认出售' : confirmModal.action === 'batchSell' ? '确认出售' : '确认使用'"
       @confirm="handleConfirm"
       @cancel="handleCancel"
-    />
+    >
+      <div v-if="confirmModal.action === 'use' && confirmModal.item" class="use-quantity">
+        <span>使用数量</span>
+        <div class="use-stepper">
+          <button type="button" aria-label="减少数量" :disabled="confirmModal.loading || confirmModal.useCount <= 1" @click="setUseCount(confirmModal.useCount - 1)">
+            <div class="i-carbon-subtract" />
+          </button>
+          <input
+            :value="confirmModal.useCount"
+            type="number"
+            inputmode="numeric"
+            min="1"
+            :max="maxUseCount"
+            :disabled="confirmModal.loading"
+            aria-label="使用数量"
+            @input="setUseCount(($event.target as HTMLInputElement).value)"
+          >
+          <button type="button" aria-label="增加数量" :disabled="confirmModal.loading || confirmModal.useCount >= maxUseCount" @click="setUseCount(confirmModal.useCount + 1)">
+            <div class="i-carbon-add" />
+          </button>
+          <button type="button" class="use-all" :disabled="confirmModal.loading || confirmModal.useCount >= maxUseCount" @click="setUseCount(maxUseCount)">全部</button>
+        </div>
+      </div>
+    </ConfirmModal>
   </div>
 </template>
 
@@ -543,4 +594,6 @@ useIntervalFn(loadBag, 60000)
   color: #9ca3af;
   text-transform: uppercase;
 }
+
+.use-quantity{margin:-1rem 0 1.5rem;padding:14px;border:1px solid #dccda9;border-radius:8px;background:#fffdf7}.use-quantity>span{display:block;margin-bottom:8px;color:#715f48;font-size:12px;font-weight:700}.use-stepper{display:grid;grid-template-columns:40px minmax(60px,1fr) 40px 54px;gap:7px}.use-stepper button,.use-stepper input{height:40px;border:1px solid #c9b98f;border-radius:6px}.use-stepper button{display:grid;place-items:center;color:#4e402e;background:#f5ead0;cursor:pointer}.use-stepper button:disabled{opacity:.45;cursor:not-allowed}.use-stepper input{min-width:0;padding:0 6px;color:#3d2b1f;background:white;font-weight:800;text-align:center}.use-stepper .use-all{color:white;background:#537c49;font-size:12px;font-weight:700}
 </style>

@@ -121,7 +121,7 @@ function createDataProvider(options: DataProviderOptions) {
         getBag: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getBag'),
         getBagSeeds: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getBagSeeds'),
         getDiamondBalance: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getDiamondBalance'),
-        useItem: (accountRef: string, itemId: number, count: number) => callWorkerApi(resolveAccountRefId(accountRef), 'useItem', itemId, count),
+        useItem: (accountRef: string, itemId: number, count: number, uid = 0) => callWorkerApi(resolveAccountRefId(accountRef), 'useItem', itemId, count, uid),
         sellItems: (accountRef: string, items: any[]) => callWorkerApi(resolveAccountRefId(accountRef), 'sellItems', items),
         getDailyGifts: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getDailyGiftOverview'),
         getActivityCenterSnapshot: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getActivityCenterSnapshot'),
@@ -134,6 +134,11 @@ function createDataProvider(options: DataProviderOptions) {
         ),
         lightConstellation: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'lightConstellation'),
         claimSolarTerm: (accountRef: string, termId: string) => callWorkerApi(resolveAccountRefId(accountRef), 'claimSolarTerm', termId),
+        getCurrentQingMeiActivity: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getCurrentQingMeiActivity'),
+        claimQingMeiDailySeed: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'claimQingMeiDailySeed'),
+        startQingMeiBrew: (accountRef: string, ingredients: unknown) => callWorkerApi(resolveAccountRefId(accountRef), 'startQingMeiBrew', ingredients),
+        continueQingMeiBrew: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'continueQingMeiBrew'),
+        settleQingMeiBrew: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'settleQingMeiBrew'),
         getMallCatalog: (accountRef: string, slotType: unknown, subSlotType: unknown) => (
             callWorkerApi(resolveAccountRefId(accountRef), 'getMallCatalog', slotType, subSlotType)
         ),
@@ -141,6 +146,9 @@ function createDataProvider(options: DataProviderOptions) {
             callWorkerApi(resolveAccountRefId(accountRef), 'purchaseMallProduct', goodsId, count)
         ),
         getMysteryShop: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getMysteryShop'),
+        purchaseMysteryOffer: (accountRef: string, npcId: unknown) => (
+            callWorkerApi(resolveAccountRefId(accountRef), 'purchaseMysteryOffer', npcId)
+        ),
         getSeeds: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getSeeds'),
 
         setAutomation: async (accountRef: string, key: string, value: any) => {

@@ -5,6 +5,7 @@ import type { AdminContext } from './context';
 const { getAccId, checkAccountAccess } = require('./middleware');
 
 const ACTIVITY_ERROR_MESSAGES: Record<string, string> = {
+    '1034014': '今日青梅种子已经领取，无需重复领取',
     '1034038': '当前没有可点亮或可领取的星宿奖励，可能已经领取过，请稍后或明天再来看看',
     '1034001': '当前活动暂不可操作，请稍后再试',
     '1034002': '活动尚未开放或已经结束',
@@ -100,6 +101,7 @@ function mountActivityCenterRoutes(app: Application, ctx: AdminContext): void {
     mountGet('/api/activity-center/season', 'getCurrentSeasonEvent');
     mountGet('/api/activity-center/shop', 'getCurrentStarSandShop');
     mountGet('/api/activity-center/solar-terms', 'getCurrentSolarTerms');
+    mountGet('/api/activity-center/qingmei', 'getCurrentQingMeiActivity');
 
     app.post('/api/activity-center/pass/claim', withAccount((accountId: string) => (
         ctx.provider.claimBattlePassRewards(accountId)
@@ -121,6 +123,22 @@ function mountActivityCenterRoutes(app: Application, ctx: AdminContext): void {
         }
         return ctx.provider.claimSolarTerm(accountId, termId);
     }));
+
+    app.post('/api/activity-center/qingmei/daily-seed/claim', withAccount((accountId: string) => (
+        ctx.provider.claimQingMeiDailySeed(accountId)
+    )));
+
+    app.post('/api/activity-center/qingmei/brew/start', withAccount((accountId: string, req: Request) => (
+        ctx.provider.startQingMeiBrew(accountId, req.body?.ingredients ?? req.body?.count)
+    )));
+
+    app.post('/api/activity-center/qingmei/brew/continue', withAccount((accountId: string) => (
+        ctx.provider.continueQingMeiBrew(accountId)
+    )));
+
+    app.post('/api/activity-center/qingmei/brew/settle', withAccount((accountId: string) => (
+        ctx.provider.settleQingMeiBrew(accountId)
+    )));
 }
 
 module.exports = { mountActivityCenterRoutes };

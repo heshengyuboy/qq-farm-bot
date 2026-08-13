@@ -11,6 +11,10 @@ const ERROR_MESSAGES: Record<string, string> = {
     GOODS_UNAVAILABLE: '商品当前不可购买',
     PURCHASE_LIMIT_EXCEEDED: '购买数量超过剩余限购数量',
     INSUFFICIENT_BALANCE: '货币余额不足，无法完成购买',
+    INVALID_MYSTERY_NPC_ID: '神秘商人信息无效，请刷新后重试',
+    MYSTERY_OFFER_STALE: '神秘商人货品已变化，请刷新后重试',
+    MYSTERY_OFFER_SOLD_OUT: '神秘商人货品已售罄',
+    MYSTERY_PURCHASE_NOT_CONFIRMED: '购买结果未确认，请刷新后查看',
 };
 
 function friendlyError(error: any): { code: string; message: string } {
@@ -54,6 +58,10 @@ function mountCommerceRoutes(app: Application, ctx: AdminContext): void {
 
     app.get('/api/mystery-shop', withAccount((accountId: string) => (
         ctx.provider.getMysteryShop(accountId)
+    )));
+
+    app.post('/api/mystery-shop/purchase', withAccount((accountId: string, req: Request) => (
+        ctx.provider.purchaseMysteryOffer(accountId, req.body?.npcId)
     )));
 }
 

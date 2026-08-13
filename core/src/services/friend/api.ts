@@ -182,31 +182,22 @@ export async function stealHarvest(friendGid: number, landIds: number[]): Promis
 }
 
 export async function putPlantItems(friendGid: number, landIds: number[], RequestType: any, ReplyType: any, method: string): Promise<number> {
-    const ids: number[] = Array.isArray(landIds) ? landIds : [];
-    if (ids.length === 0 || schedulerRef().isBadOperationLimitReached()) return 0;
-    try {
-        const body: Uint8Array = RequestType.encode(RequestType.create({
-            land_ids: ids.map((id: number) => toLong(id)),
-            host_gid: toLong(friendGid),
-        })).finish();
-        const { body: replyBody } = await sendMsgAsync('gamepb.plantpb.PlantService', method, body, {
-            expectedErrorCodes: [1001046],
+    const result = await putPlantItemsDetailed(friendGid, landIds, RequestType, ReplyType, method);
+    if (result.failed.length > 0 && !result.limitReached) {
+        log('好友', `放虫/放草部分失败: ${result.failed[0].reason}`, {
+            module: 'friend',
+            event: '放虫放草失败',
+            method,
+            failedCount: result.failed.length,
         });
-        const reply: any = ReplyType.decode(replyBody);
-        schedulerRef().updateOperationLimits(reply.operation_limits);
-        return ids.length;
-    } catch (e: any) {
-        if (e instanceof GatewayError && e.code === 1001046) {
-            schedulerRef().markBadOperationLimitReached(method);
-        } else {
-            log('好友', `放虫/放草失败: ${e.message}`, { module: 'friend', event: '放虫放草失败', error: e.message });
-        }
-        return 0;
     }
+    return result.ok;
 }
 
 export async function putPlantItemsDetailed(friendGid: number, landIds: number[], RequestType: any, ReplyType: any, method: string): Promise<{ ok: number; failed: any[]; limitReached?: boolean }> {
-    const ids: number[] = Array.isArray(landIds) ? landIds : [];
+    const ids: number[] = [...new Set<number>((Array.isArray(landIds) ? landIds : [])
+        .map((id: any) => toNum(id))
+        .filter((id: number) => id > 0))];
     if (ids.length === 0) return { ok: 0, failed: [] };
     if (schedulerRef().isBadOperationLimitReached()) {
         return {
@@ -215,29 +206,49 @@ export async function putPlantItemsDetailed(friendGid: number, landIds: number[]
             failed: ids.map((id: number) => ({ landId: id, reason: '今日放虫/放草次数已达上限' })),
         };
     }
-    try {
-        const body: Uint8Array = RequestType.encode(RequestType.create({
-            land_ids: ids.map((id: number) => toLong(id)),
-            host_gid: toLong(friendGid),
-        })).finish();
-        const { body: replyBody } = await sendMsgAsync('gamepb.plantpb.PlantService', method, body, {
-            expectedErrorCodes: [1001046],
-        });
-        const reply: any = ReplyType.decode(replyBody);
-        schedulerRef().updateOperationLimits(reply.operation_limits);
-        return { ok: ids.length, failed: [] };
-    } catch (e: any) {
-        const limitReached: boolean = e instanceof GatewayError && e.code === 1001046;
-        if (limitReached) schedulerRef().markBadOperationLimitReached(method);
-        return {
-            ok: 0,
-            limitReached,
-            failed: ids.map((id: number) => ({
-                landId: id,
-                reason: limitReached ? '今日放虫/放草次数已达上限' : (e && e.message ? e.message : '未知错误'),
-            })),
-        };
+
+    let ok: number = 0;
+    const failed: any[] = [];
+    for (let index: number = 0; index < ids.length; index++) {
+        const landId: number = ids[index];
+        if (schedulerRef().isBadOperationLimitReached() || schedulerRef().getRemainingBadOperationTimes() <= 0) {
+            schedulerRef().markBadOperationLimitReached('operation_limit');
+            failed.push(...ids.slice(index).map((id: number) => ({ landId: id, reason: '今日放虫/放草次数已达上限' })));
+            break;
+        }
+
+        try {
+            // The game client sends one PutWeeds/PutInsects request per land.
+            const body: Uint8Array = RequestType.encode(RequestType.create({
+                land_ids: [toLong(landId)],
+                host_gid: toLong(friendGid),
+            })).finish();
+            const { body: replyBody } = await sendMsgAsync('gamepb.plantpb.PlantService', method, body, {
+                expectedErrorCodes: [1001046],
+            });
+            const reply: any = ReplyType.decode(replyBody);
+            schedulerRef().updateOperationLimits(reply.operation_limits);
+            const confirmed: boolean = (Array.isArray(reply.land) ? reply.land : [])
+                .some((land: any) => toNum(land && land.id) === landId);
+            if (confirmed) ok++;
+            else failed.push({ landId, reason: '服务端未确认土地状态变化' });
+        } catch (e: any) {
+            const limitReached: boolean = e instanceof GatewayError && e.code === 1001046;
+            if (limitReached) {
+                schedulerRef().markBadOperationLimitReached(method);
+                failed.push(...ids.slice(index).map((id: number) => ({ landId: id, reason: '今日放虫/放草次数已达上限' })));
+                break;
+            }
+            failed.push({ landId, reason: e && e.message ? e.message : '未知错误' });
+        }
+
+        if (index < ids.length - 1 && !schedulerRef().isBadOperationLimitReached()) {
+            await randomDelay(80, 160);
+        }
     }
+
+    const limitReached: boolean = schedulerRef().isBadOperationLimitReached();
+    return { ok, failed, ...(limitReached ? { limitReached: true } : {}) };
 }
 
 export async function putInsects(friendGid: number, landIds: number[]): Promise<number> {

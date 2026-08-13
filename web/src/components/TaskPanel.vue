@@ -11,6 +11,7 @@ const { status, dailyGifts, realtimeConnected } = storeToRefs(statusStore)
 const { currentAccountId, currentAccount } = storeToRefs(accountStore)
 
 const growth = computed(() => dailyGifts.value?.growth || null)
+const growthCurrentTask = computed(() => growth.value?.currentTask || growth.value?.tasks?.[0] || null)
 
 async function refresh() {
   if (currentAccountId.value) {
@@ -73,12 +74,9 @@ function formatTaskProgress(task: any) {
         </h3>
         <span
           v-if="growth"
-          class="rounded-lg px-2.5 py-0.5 text-xs font-bold"
-          :class="growth.doneToday
-            ? 'text-green-600 bg-green-50 dark:text-green-400 dark:bg-green-900/20'
-            : 'text-blue-600 bg-blue-50 dark:text-blue-400 dark:bg-blue-900/20'"
+          class="rounded-lg px-2.5 py-0.5 text-xs font-bold text-blue-600 bg-blue-50 dark:text-blue-400 dark:bg-blue-900/20"
         >
-          {{ growth.doneToday ? '今日已完成' : `${growth.completedCount}/${growth.totalCount}` }}
+          {{ growthCurrentTask ? `${growthCurrentTask.progress}/${growthCurrentTask.totalProgress}` : '暂无任务' }}
         </span>
       </div>
 

@@ -6,21 +6,20 @@ import { useAccountStore } from '@/stores/account'
 export const useBagStore = defineStore('bag', () => {
   const allItems = ref<any[]>([])
   const originalItems = ref<any[]>([])
+  const systemItems = ref<any[]>([])
   const loading = ref(false)
 
   function clearBag() {
     allItems.value = []
     originalItems.value = []
+    systemItems.value = []
   }
 
-  const items = computed(() => {
-    const hiddenIds = new Set([1, 1001, 1002, 1101, 1011, 1012, 3001, 3002])
-    return allItems.value.filter((it: any) => !hiddenIds.has(Number(it.id || 0)))
-  })
+  const items = computed(() => allItems.value)
 
   const dashboardItems = computed(() => {
     const targetIds = new Set([1011, 1012, 3001, 3002])
-    return allItems.value.filter((it: any) => targetIds.has(Number(it.id || 0)))
+    return systemItems.value.filter((it: any) => targetIds.has(Number(it.id || 0)))
   })
 
   async function fetchBag(accountId: string) {
@@ -39,10 +38,12 @@ export const useBagStore = defineStore('bag', () => {
       if (res.data.ok && res.data.data) {
         allItems.value = Array.isArray(res.data.data.items) ? res.data.data.items : []
         originalItems.value = Array.isArray(res.data.data.originalItems) ? res.data.data.originalItems : []
+        systemItems.value = Array.isArray(res.data.data.systemItems) ? res.data.data.systemItems : []
       }
       else if (res.data && res.data.ok === false && res.data.error) {
         allItems.value = []
         originalItems.value = []
+        systemItems.value = []
       }
     }
     catch (e) {
@@ -51,6 +52,7 @@ export const useBagStore = defineStore('bag', () => {
       if (curId === requestedId) {
         allItems.value = []
         originalItems.value = []
+        systemItems.value = []
       }
       console.error(e)
     }
@@ -59,8 +61,8 @@ export const useBagStore = defineStore('bag', () => {
     }
   }
 
-  async function useItem(accountId: string, itemId: number, count = 1) {
-    const res = await api.post('/api/bag/use', { itemId, count }, {
+  async function useItem(accountId: string, itemId: number, count = 1, uid = 0) {
+    const res = await api.post('/api/bag/use', { itemId, count, uid }, {
       headers: { 'x-account-id': accountId },
     })
     return res.data
@@ -73,5 +75,5 @@ export const useBagStore = defineStore('bag', () => {
     return res.data
   }
 
-  return { items, allItems, originalItems, dashboardItems, loading, fetchBag, clearBag, useItem, sellItems }
+  return { items, allItems, originalItems, systemItems, dashboardItems, loading, fetchBag, clearBag, useItem, sellItems }
 })

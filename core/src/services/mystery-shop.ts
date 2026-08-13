@@ -1,6 +1,6 @@
 export {};
 
-const { sendMsgAsync } = require('../utils/network');
+const { sendMsgAsync, sendMsgNoReply } = require('../utils/network');
 const { types } = require('../utils/proto');
 
 const MYSTERY_SHOP_SERVICE = 'gamepb.mysteryshoppb.MysteryShopService';
@@ -13,6 +13,14 @@ async function getActiveNPC(): Promise<any> {
     return types.GetActiveNPCReply.decode(replyBody);
 }
 
+async function buy(npcId: number): Promise<void> {
+    const body: Uint8Array = types.MysteryShopBuyRequest
+        .encode(types.MysteryShopBuyRequest.create({ npc_id: npcId }))
+        .finish();
+    await sendMsgNoReply(MYSTERY_SHOP_SERVICE, 'Buy', body);
+}
+
 module.exports = {
     getActiveNPC,
+    buy,
 };

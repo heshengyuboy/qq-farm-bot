@@ -344,9 +344,9 @@ function mountFarmRoutes(app: Application, ctx: AdminContext): void {
         }
 
         try {
-            const { itemId, count } = req.body;
+            const { itemId, count, uid } = req.body;
             if (!itemId) return res.status(400).json({ ok: false, error: '缺少 itemId' });
-            const data = await ctx.provider.useItem(id, Number(itemId), Math.max(1, Number(count) || 1));
+            const data = await ctx.provider.useItem(id, Number(itemId), Math.max(1, Number(count) || 1), Number(uid) || 0);
             res.json({ ok: true, data });
         } catch (e: any) {
             handleApiError(res, e);

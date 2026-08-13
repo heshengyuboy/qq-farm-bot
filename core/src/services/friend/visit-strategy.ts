@@ -696,17 +696,17 @@ export async function doFriendOperation(friendGid: any, opType: string): Promise
 
             // 手动捣乱不依赖预检查，逐块执行（与 terminal-farm-main 保持一致）
             let failDetails: string[] = [];
-            if (status.canPutBug.length) {
-                const bugRet: { ok: number; failed: any[]; limitReached?: boolean } = await putInsectsDetailed(gid, status.canPutBug);
-                bugCount = bugRet.ok;
-                failDetails = failDetails.concat((bugRet.failed || []).map((f: any) => `放虫#${f.landId}:${f.reason}`));
-                if (bugCount > 0) recordOperation('bug', bugCount);
-            }
-            if (!schedulerRef().isBadOperationLimitReached() && status.canPutWeed.length) {
+            if (status.canPutWeed.length) {
                 const weedRet: { ok: number; failed: any[]; limitReached?: boolean } = await putWeedsDetailed(gid, status.canPutWeed);
                 weedCount = weedRet.ok;
                 failDetails = failDetails.concat((weedRet.failed || []).map((f: any) => `放草#${f.landId}:${f.reason}`));
                 if (weedCount > 0) recordOperation('weed', weedCount);
+            }
+            if (!schedulerRef().isBadOperationLimitReached() && status.canPutBug.length) {
+                const bugRet: { ok: number; failed: any[]; limitReached?: boolean } = await putInsectsDetailed(gid, status.canPutBug);
+                bugCount = bugRet.ok;
+                failDetails = failDetails.concat((bugRet.failed || []).map((f: any) => `放虫#${f.landId}:${f.reason}`));
+                if (bugCount > 0) recordOperation('bug', bugCount);
             }
             count = bugCount + weedCount;
             if (schedulerRef().isBadOperationLimitReached()) {
@@ -790,7 +790,7 @@ export async function visitFriend(friend: any, totalActions: any, myGid: number,
         // 今日已达到经验上限后停止帮忙
     } else {
         const allHelpLandIds: number[] = [...new Set([...status.needWeed, ...status.needBug, ...status.needWater])];
-        const allExpIds: number[] = [10001, 10002, 10003, 10004, 10005, 10006];
+        const allExpIds: number[] = [10005, 10006, 10007];
         const allowByExp: boolean = (!stopWhenExpLimit) || (schedulerRef().canGetExpByCandidates(allExpIds) && schedulerRef().getCanGetHelpExp());
         if (allHelpLandIds.length > 0 && allowByExp) {
             const outcome: FarmingOutcome = await runFarmingWithFallback(gid, allHelpLandIds, stopWhenExpLimit, getHelpSnapshotKey(lands));
@@ -846,19 +846,19 @@ export async function visitFriend(friend: any, totalActions: any, myGid: number,
     // 3. 捣乱操作 (放虫/放草)
     const autoBad: boolean = isAutomationOn('friend_bad');
     if (autoBad && !schedulerRef().isBadOperationLimitReached()) {
-        if (status.canPutBug.length > 0) {
-            const remaining: number = schedulerRef().getRemainingTimes(10005);
-            const toProcess: number[] = status.canPutBug.slice(0, remaining);
-            const ok: number = await putInsects(gid, toProcess);
-            if (ok > 0) { actions.push(`放虫${ok}`); totalActions.putBug += ok; }
-            if (!schedulerRef().isBadOperationLimitReached()) await randomDelay(500, 800);
-        }
-
-        if (!schedulerRef().isBadOperationLimitReached() && status.canPutWeed.length > 0) {
-            const remaining: number = schedulerRef().getRemainingTimes(10006);
+        if (status.canPutWeed.length > 0) {
+            const remaining: number = schedulerRef().getRemainingBadOperationTimes();
             const toProcess: number[] = status.canPutWeed.slice(0, remaining);
             const ok: number = await putWeeds(gid, toProcess);
             if (ok > 0) { actions.push(`放草${ok}`); totalActions.putWeed += ok; }
+            if (!schedulerRef().isBadOperationLimitReached()) await randomDelay(500, 800);
+        }
+
+        if (!schedulerRef().isBadOperationLimitReached() && status.canPutBug.length > 0) {
+            const remaining: number = schedulerRef().getRemainingBadOperationTimes();
+            const toProcess: number[] = status.canPutBug.slice(0, remaining);
+            const ok: number = await putInsects(gid, toProcess);
+            if (ok > 0) { actions.push(`放虫${ok}`); totalActions.putBug += ok; }
             await randomDelay(500, 800);
         }
     }
@@ -1026,7 +1026,7 @@ export async function visitFriendForHelp(friend: any, totalActions: any, myGid: 
     const actions: string[] = [];
 
     const allHelpLandIds: number[] = [...new Set([...status.needWeed, ...status.needBug, ...status.needWater])];
-    const allExpIds: number[] = [10001, 10002, 10003, 10004, 10005, 10006];
+    const allExpIds: number[] = [10005, 10006, 10007];
     const allowByExp: boolean = (!stopWhenExpLimit) || (schedulerRef().canGetExpByCandidates(allExpIds) && schedulerRef().getCanGetHelpExp());
     if (allHelpLandIds.length > 0 && allowByExp) {
         const outcome: FarmingOutcome = await runFarmingWithFallback(gid, allHelpLandIds, stopWhenExpLimit, getHelpSnapshotKey(lands));

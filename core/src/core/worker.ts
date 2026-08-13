@@ -854,7 +854,8 @@ async function handleApiCall(msg: any): Promise<void> {
                 const { useItem: _useItem } = require('../services/warehouse');
                 const itemId = Number(args[0]) || 0;
                 const count = Math.max(1, Number(args[1]) || 1);
-                result = await _useItem(itemId, count, []);
+                const uid = Number(args[2]) || 0;
+                result = await _useItem(itemId, count, [], uid);
                 break;
             }
             case 'sellItems': {
@@ -915,6 +916,21 @@ async function handleApiCall(msg: any): Promise<void> {
             case 'claimSolarTerm':
                 result = await require('../services/activity-center').claimSolarTerm(String(args[0] || ''));
                 break;
+            case 'getCurrentQingMeiActivity':
+                result = await require('../services/activity-center').getCurrentQingMeiActivity();
+                break;
+            case 'claimQingMeiDailySeed':
+                result = await require('../services/activity-center').claimQingMeiDailySeed();
+                break;
+            case 'startQingMeiBrew':
+                result = await require('../services/activity-center').startQingMeiBrew(args[0]);
+                break;
+            case 'continueQingMeiBrew':
+                result = await require('../services/activity-center').continueQingMeiBrew();
+                break;
+            case 'settleQingMeiBrew':
+                result = await require('../services/activity-center').settleQingMeiBrew();
+                break;
             case 'getMallCatalog':
                 result = await require('../services/commerce').getMallCatalog(args[0], args[1]);
                 break;
@@ -923,6 +939,9 @@ async function handleApiCall(msg: any): Promise<void> {
                 break;
             case 'getMysteryShop':
                 result = await require('../services/commerce').getMysteryShop();
+                break;
+            case 'purchaseMysteryOffer':
+                result = await require('../services/commerce').purchaseMysteryOffer(args[0]);
                 break;
             case 'getSchedulers':
                 result = getSchedulerRegistrySnapshot();
@@ -970,6 +989,7 @@ async function getDailyGiftOverview(): Promise<any> {
             doneToday: !!growthTask.doneToday,
             completedCount: Number(growthTask.completedCount || 0),
             totalCount: Number(growthTask.totalCount || 0),
+            currentTask: growthTask.currentTask || null,
             tasks: Array.isArray(growthTask.tasks) ? growthTask.tasks : [],
         },
         gifts: [

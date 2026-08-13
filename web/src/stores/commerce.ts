@@ -53,6 +53,8 @@ export interface MysteryShopDto {
     stock: number
     price: CommerceItemDto & { balance: number | null }
     originalPrice: number
+    unitPrice: number
+    unitOriginalPrice: number
     discountPercent: number
   }
 }
@@ -62,6 +64,7 @@ export const useCommerceStore = defineStore('commerce', () => {
   const mystery = ref<MysteryShopDto | null>(null)
   const mallLoading = ref(false)
   const mysteryLoading = ref(false)
+  const mysteryPurchasing = ref(false)
   const purchasingGoodsId = ref<number | null>(null)
   const error = ref('')
   const notice = ref('')
@@ -81,6 +84,7 @@ export const useCommerceStore = defineStore('commerce', () => {
     mall.value = null
     mystery.value = null
     purchasingGoodsId.value = null
+    mysteryPurchasing.value = false
     clearMessages()
   }
 
@@ -202,11 +206,39 @@ export const useCommerceStore = defineStore('commerce', () => {
     }
   }
 
+  async function purchaseMystery(accountId: string, npcId: number) {
+    const id = String(accountId || '').trim()
+    if (!id || mysteryPurchasing.value) return false
+    mysteryPurchasing.value = true
+    clearMessages()
+    try {
+      const response = await api.post('/api/mystery-shop/purchase', { npcId }, {
+        headers: { 'x-account-id': id },
+        skipErrorToast: true,
+      } as any)
+      if (!response.data?.ok) throw new Error(response.data?.error || '购买失败')
+      if (String(localStorage.getItem('current_account_id') || '') !== id) return false
+      mystery.value = response.data.data.shop
+      const reward = response.data.data.purchase?.reward as CommerceItemDto | undefined
+      notice.value = reward ? `购买成功：${reward.name} x${reward.count}` : '购买成功'
+      return true
+    }
+    catch (cause: any) {
+      if (String(localStorage.getItem('current_account_id') || '') === id)
+        error.value = cause?.response?.data?.error || cause?.message || '购买失败'
+      return false
+    }
+    finally {
+      mysteryPurchasing.value = false
+    }
+  }
+
   return {
     mall,
     mystery,
     mallLoading,
     mysteryLoading,
+    mysteryPurchasing,
     purchasingGoodsId,
     error,
     notice,
@@ -215,5 +247,6 @@ export const useCommerceStore = defineStore('commerce', () => {
     fetchMall,
     purchaseMall,
     fetchMystery,
+    purchaseMystery,
   }
 })

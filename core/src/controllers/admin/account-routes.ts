@@ -87,13 +87,23 @@ function mountAccountRoutes(app: Application, ctx: AdminContext): void {
 
     app.post('/api/accounts', (req: Request, res: Response) => {
         try {
-            const body = (req.body && typeof req.body === 'object') ? req.body : {};
+            const rawBody = (req.body && typeof req.body === 'object') ? req.body : {};
             const currentUser = (req as any).currentUser;
-            const isUpdate = !!body.id;
+            const requestedName = typeof rawBody.name === 'string' ? rawBody.name.trim() : '';
+            const body = typeof rawBody.name === 'string' ? { ...rawBody, name: requestedName } : rawBody;
+            const visibleAccounts = currentUser && currentUser.username
+                ? getAccountList(ctx, currentUser.username)
+                : [];
+            const remarkMatchedAccount = !body.id && requestedName
+                ? visibleAccounts.find((account: any) => String(account.name || '').trim() === requestedName)
+                : null;
+            const isRemarkRelogin = !!remarkMatchedAccount;
+            const updateRef = body.id || (remarkMatchedAccount && remarkMatchedAccount.id) || '';
+            const isUpdate = !!updateRef;
 
             // 检查权限：普通用户只能更新自己的账号
             if (isUpdate && currentUser && currentUser.role !== 'admin') {
-                if (!checkAccountAccess(ctx, req as any, resolveAccId(ctx, body.id))) {
+                if (!checkAccountAccess(ctx, req as any, resolveAccId(ctx, updateRef))) {
                     return res.status(403).json({ ok: false, error: '无权访问此账号' });
                 }
             }
@@ -112,8 +122,8 @@ function mountAccountRoutes(app: Application, ctx: AdminContext): void {
                 }
             }
 
-            const resolvedUpdateId = isUpdate ? resolveAccId(ctx, body.id) : '';
-            const payload = isUpdate ? { ...body, id: resolvedUpdateId || String(body.id) } : body;
+            const resolvedUpdateId = isUpdate ? resolveAccId(ctx, updateRef) : '';
+            const payload = isUpdate ? { ...body, id: resolvedUpdateId || String(updateRef) } : body;
             let wasRunning = false;
             if (isUpdate && ctx.provider.isAccountRunning) {
                 wasRunning = ctx.provider.isAccountRunning(payload.id);
@@ -145,7 +155,9 @@ function mountAccountRoutes(app: Application, ctx: AdminContext): void {
                 const accountName = payload.name || '';
                 ctx.provider.addAccountLog(
                     isUpdate ? 'update' : 'add',
-                    isUpdate ? `更新账号: ${accountName || accountId}` : `添加账号: ${accountName || accountId}`,
+                    isRemarkRelogin
+                        ? `通过备注重新登录账号: ${accountName || accountId}`
+                        : isUpdate ? `更新账号: ${accountName || accountId}` : `添加账号: ${accountName || accountId}`,
                     accountId,
                     accountName
                 );
@@ -158,6 +170,9 @@ function mountAccountRoutes(app: Application, ctx: AdminContext): void {
             if (!isUpdate) {
                 const newAcc = data.accounts[data.accounts.length - 1];
                 if (newAcc) ctx.provider.startAccount(newAcc.id);
+            } else if (isRemarkRelogin) {
+                // Adding with an existing remark is a relogin operation, including for stopped accounts.
+                ctx.provider.restartAccount(payload.id);
             } else if (wasRunning && !onlyRemarkChanged) {
                 // 如果是更新，且之前在运行，且不是仅修改备注，则重启
                 ctx.provider.restartAccount(payload.id);

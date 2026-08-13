@@ -334,6 +334,33 @@ function parseSells(sells: string | null | undefined): { currencyId: number; pri
     });
 }
 
+interface EffectiveSellInfo {
+    sellable: boolean;
+    status: 'available' | 'conditional' | 'unavailable';
+    condition: string | null;
+    sells: { currencyId: number; price: number }[];
+}
+
+/** Resolve the directly available price without guessing dynamic game conditions. */
+function getEffectiveSellInfo(itemOrId: ItemInfo | number | null | undefined): EffectiveSellInfo {
+    const item: ItemInfo | undefined = typeof itemOrId === 'number'
+        ? getItemById(itemOrId)
+        : (itemOrId || undefined);
+    if (!item) return { sellable: false, status: 'unavailable', condition: null, sells: [] };
+
+    const normalSells = parseSells(item.sells).filter(sell => sell.currencyId > 0 && sell.price > 0);
+    const condition = item.sell_cond ? String(item.sell_cond).trim() : '';
+    const conditionalSells = parseSells(item.cond_sells).filter(sell => sell.currencyId > 0 && sell.price > 0);
+
+    if (normalSells.length > 0) {
+        return { sellable: true, status: 'available', condition: condition || null, sells: normalSells };
+    }
+    if (condition && conditionalSells.length > 0) {
+        return { sellable: false, status: 'conditional', condition, sells: [] };
+    }
+    return { sellable: false, status: 'unavailable', condition: condition || null, sells: [] };
+}
+
 function getSeedPrice(seedId: number): number {
     const item = seedItemMap.get(Number(seedId) || 0);
     if (!item) return 0;
@@ -349,8 +376,7 @@ function getFruitPrice(fruitId: number): number {
     if (!item) return 0;
     const sellsList = parseSells(item.sells);
     if (sellsList.length > 0) return sellsList[0].price;
-    // 回退到 cond_sells（活动道具可能 sells 为 null）
-    const condList = parseSells((item as any).cond_sells);
+    const condList = parseSells(item.cond_sells);
     return condList.length > 0 ? condList[0].price : 0;
 }
 
@@ -423,6 +449,7 @@ module.exports = {
     getSeedPrice,
     getFruitPrice,
     parseSells,
+    getEffectiveSellInfo,
     getSeedImageBySeedId,
     // 配置管理查询
     getAllFruits,

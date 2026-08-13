@@ -25,7 +25,7 @@ const FERTILIZER_LAND_TYPE_SET: Set<string> = new Set(DEFAULT_FERTILIZER_LAND_TY
 const INTERVAL_MAX_SEC: number = 86400;
 const DEFAULT_KNOWN_FRIEND_GID_SYNC_COOLDOWN_SEC: number = 300;
 const DEFAULT_FRIENDS_LIST_CACHE_TTL_SEC: number = 60;
-const PREVIOUS_DEFAULT_CLIENT_VERSION: string = '1.12.5.29_20260721';
+const PREVIOUS_DEFAULT_CLIENT_VERSION: string = '1.13.0.5_20260723';
 let systemConfigMigrated: boolean = false;
 
 const DEFAULT_OFFLINE_REMINDER: OfflineReminder = {

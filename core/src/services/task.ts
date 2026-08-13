@@ -303,6 +303,11 @@ async function doClaim(task: any): Promise<boolean> {
         taskClaimLastAt = Date.now();
         recordOperation('taskClaim', 1);
         await sleep(300);
+        if (task.category === 'growth') {
+            // The server exposes one growth task at a time. Fetching again after a
+            // successful claim makes the next task visible immediately.
+            await getTaskInfo();
+        }
         return true;
     } catch {
         // 领取失败静默处理
@@ -429,13 +434,17 @@ module.exports = {
                     isCompleted,
                 };
             });
-            const totalCount: number = tasks.length;
-            const completedCount: number = tasks.filter((t: any) => t.isCompleted).length;
+            const activeTasks: any[] = tasks.filter((t: any) => t.isUnlocked && !t.isClaimed);
+            const currentTask: any | null = activeTasks[0] || tasks[0] || null;
             return {
                 key: 'growth_task',
-                doneToday: totalCount > 0 && completedCount >= totalCount,
-                completedCount,
-                totalCount,
+                // Growth tasks are a chain, not a daily checklist. An empty server
+                // list means the chain is complete; a completed current task is
+                // claimable and will be replaced by the next task after claiming.
+                doneToday: false,
+                completedCount: currentTask ? Math.min(currentTask.progress, currentTask.totalProgress) : 0,
+                totalCount: currentTask ? currentTask.totalProgress : 0,
+                currentTask,
                 tasks,
             };
         } catch {

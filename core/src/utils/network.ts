@@ -247,6 +247,19 @@ function sendMsgAsync(serviceName: string, methodName: string, bodyBytes: Buffer
     });
 }
 
+async function sendMsgNoReply(serviceName: string, methodName: string, bodyBytes: Buffer): Promise<void> {
+    const context = currentConnection;
+    if (!context || !isCurrentConnection(context) || context.socket.readyState !== WebSocket.OPEN) {
+        throw new Error(`连接未打开: ${methodName}`);
+    }
+    if (context.phase !== 'online') {
+        throw new Error(`账号尚未登录: ${methodName}`);
+    }
+    if (!await sendMsg(context, serviceName, methodName, bodyBytes)) {
+        throw new Error(`发送失败: ${methodName}`);
+    }
+}
+
 // ============ 消息处理 ============
 function handleMessage(data: Buffer): void {
     try {
@@ -808,7 +821,7 @@ function getWs(): WebSocket | null { return ws; }
 
 module.exports = {
     connect, cleanup, getWs,
-    sendMsgAsync,
+    sendMsgAsync, sendMsgNoReply,
     GatewayError,
     getUserState,
     getWsErrorState,

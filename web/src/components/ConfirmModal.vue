@@ -27,6 +27,7 @@ const emit = defineEmits<{
       <p class="mb-8 whitespace-pre-line leading-relaxed text-[#5a4a3a] dark:text-gray-300">
         {{ message || '确定要执行此操作吗？' }}
       </p>
+      <slot />
       <div class="flex justify-end gap-3">
         <BaseButton
           v-if="!isAlert"

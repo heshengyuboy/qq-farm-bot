@@ -4,6 +4,7 @@ import api from '@/api'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseTextarea from '@/components/ui/BaseTextarea.vue'
+import { runWxLoginStatusPoll } from '@/utils/wx-login-poll'
 
 const props = defineProps<{
   show: boolean
@@ -22,6 +23,10 @@ const wxLoading = ref(false)
 const wxQrUrl = ref('')
 let wxPollTimer: ReturnType<typeof setTimeout> | undefined
 let wxQrObjectUrl = ''
+let wxFlowVersion = 0
+let wxPollController: AbortController | undefined
+let wxPollInFlight: Promise<void> | undefined
+let wxPollKey = ''
 
 // 表单数据
 const form = reactive({
@@ -103,10 +108,17 @@ function stopWxPolling() {
     clearTimeout(wxPollTimer)
     wxPollTimer = undefined
   }
+  wxPollController?.abort()
+  wxPollController = undefined
 }
 
 function resetWxLogin() {
+  const oldTaskId = wxTaskId.value
+  wxFlowVersion += 1
   stopWxPolling()
+  if (oldTaskId) {
+    void api.delete(`/api/wx-login/tasks/${oldTaskId}`, { skipErrorToast: true } as any).catch(() => undefined)
+  }
   if (wxQrObjectUrl) {
     URL.revokeObjectURL(wxQrObjectUrl)
     wxQrObjectUrl = ''
@@ -118,8 +130,14 @@ function resetWxLogin() {
   wxLoading.value = false
 }
 
-async function getWxCodeAndAdd() {
-  const codeResult = await api.post(`/api/wx-login/tasks/${wxTaskId.value}/code`)
+function isWxFlowActive(taskId: string, flowVersion: number) {
+  return flowVersion === wxFlowVersion && taskId === wxTaskId.value
+}
+
+async function getWxCodeAndAdd(taskId: string, flowVersion: number) {
+  if (!isWxFlowActive(taskId, flowVersion)) return
+  const codeResult = await api.post(`/api/wx-login/tasks/${taskId}/code`)
+  if (!isWxFlowActive(taskId, flowVersion)) return
   const code = String(codeResult.data?.data?.code || '').trim()
   if (!code)
     throw new Error('未获取到登录 Code')
@@ -128,18 +146,26 @@ async function getWxCodeAndAdd() {
   await addAccount({ name: form.name, code, platform: 'wx', loginType: 'manual' })
 }
 
-async function confirmWxLogin() {
+async function confirmWxLogin(taskId: string, flowVersion: number) {
+  if (!isWxFlowActive(taskId, flowVersion)) return
   wxStatus.value = '正在建立登录会话...'
-  await api.post(`/api/wx-login/tasks/${wxTaskId.value}/confirm`)
-  await getWxCodeAndAdd()
+  await api.post(`/api/wx-login/tasks/${taskId}/confirm`)
+  if (!isWxFlowActive(taskId, flowVersion)) return
+  await getWxCodeAndAdd(taskId, flowVersion)
 }
 
-async function pollWxLogin() {
-  if (!wxTaskId.value)
+async function pollWxLoginRequest(taskId: string, flowVersion: number) {
+  if (!isWxFlowActive(taskId, flowVersion))
     return
 
+  const controller = new AbortController()
+  wxPollController = controller
   try {
-    const response = await api.get(`/api/wx-login/tasks/${wxTaskId.value}/status`, { timeout: 40000 })
+    const response = await runWxLoginStatusPoll(() => api.get(`/api/wx-login/tasks/${taskId}/status`, {
+      timeout: 40000,
+      signal: controller.signal,
+    }))
+    if (!isWxFlowActive(taskId, flowVersion)) return
     const status = response.data?.data?.status
     if (status === 'waiting')
       wxStatus.value = '等待微信扫码'
@@ -147,40 +173,77 @@ async function pollWxLogin() {
       wxStatus.value = '已扫码，请在手机上确认'
     else if (status === 'authorized') {
       stopWxPolling()
-      await confirmWxLogin()
+      await confirmWxLogin(taskId, flowVersion)
       return
     }
     else if (['cancelled', 'expired', 'failed'].includes(status)) {
       wxError.value = '二维码已失效，请重新获取'
       return
     }
-    wxPollTimer = setTimeout(pollWxLogin, 1200)
+    wxPollTimer = setTimeout(() => void pollWxLogin(taskId, flowVersion), 1200)
   }
   catch (error: any) {
+    if (!isWxFlowActive(taskId, flowVersion) || error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED') return
     wxError.value = error.response?.data?.error || error.message || '登录状态检查失败'
+  }
+  finally {
+    if (wxPollController === controller) wxPollController = undefined
+  }
+}
+
+async function pollWxLogin(taskId: string, flowVersion: number) {
+  if (!isWxFlowActive(taskId, flowVersion)) return
+
+  const previous = wxPollInFlight
+  const previousKey = wxPollKey
+  if (previous) {
+    await previous.catch(() => undefined)
+    if (!isWxFlowActive(taskId, flowVersion)) return
+    if (previousKey === `${taskId}:${flowVersion}`) return
+  }
+
+  const current = pollWxLoginRequest(taskId, flowVersion)
+  wxPollInFlight = current
+  wxPollKey = `${taskId}:${flowVersion}`
+  try {
+    await current
+  }
+  finally {
+    if (wxPollInFlight === current) {
+      wxPollInFlight = undefined
+      wxPollKey = ''
+    }
   }
 }
 
 async function startWxLogin() {
   resetWxLogin()
+  const flowVersion = wxFlowVersion
   wxLoading.value = true
   try {
     const response = await api.post('/api/wx-login/tasks', { app_id: 'wx5306c5978fdb76e4' })
     const task = response.data?.data
-    wxTaskId.value = task?.task_id || ''
-    if (!wxTaskId.value)
+    const taskId = String(task?.task_id || '')
+    if (!taskId)
       throw new Error('未创建登录任务')
+    if (flowVersion !== wxFlowVersion) {
+      void api.delete(`/api/wx-login/tasks/${taskId}`, { skipErrorToast: true } as any).catch(() => undefined)
+      return
+    }
+    wxTaskId.value = taskId
     const qrResponse = await api.get(task.qr_url, { responseType: 'blob' })
+    if (!isWxFlowActive(taskId, flowVersion)) return
     wxQrObjectUrl = URL.createObjectURL(qrResponse.data)
     wxQrUrl.value = wxQrObjectUrl
     wxStatus.value = '等待微信扫码'
-    void pollWxLogin()
+    void pollWxLogin(taskId, flowVersion)
   }
   catch (error: any) {
+    if (flowVersion !== wxFlowVersion) return
     wxError.value = error.response?.data?.error || error.message || '二维码获取失败'
   }
   finally {
-    wxLoading.value = false
+    if (flowVersion === wxFlowVersion) wxLoading.value = false
   }
 }
 
