@@ -5,7 +5,7 @@ export {};
 
 const protobuf = require('protobufjs');
 const { getPlantNameBySeedId, getPlantName, formatGrowTime, getPlantGrowTime, getAllSeeds, getPlantById, getPlantBySeedId, getSeedImageBySeedId } = require('../../config/gameConfig');
-const { isAutomationOn, getPreferredSeed, getAutomation, getPlantingStrategy, getBagSeedPriority, getBagSeedFallbackStrategy } = require('../../models/store');
+const { isAutomationOn, getPreferredSeed, getAutomation, getPlantingStrategy, getBagSeedPriority, getBagSeedFallbackStrategy, getBagSeedExcludeIds } = require('../../models/store');
 const { getUserState, getWsErrorState, sendMsgAsync } = require('../../utils/network');
 const { toNum, toLong, toTimeSec, getServerTimeSec, log, logWarn, sleep } = require('../../utils/utils');
 const { types } = require('../../utils/proto');
@@ -224,6 +224,7 @@ async function plantFromBagSeeds(landsToPlant: any[]): Promise<{
     const bagSeeds = await getBagSeeds();
     const state = getUserState();
     const priorityList = getBagSeedPriority();
+    const excludeIds = new Set<number>((getBagSeedExcludeIds() || []).map(Number).filter(n => Number.isFinite(n) && n > 0));
     const allBagSeeds = (Array.isArray(bagSeeds) ? bagSeeds : []);
     
     const stateLevel = toNum(state && state.level);
@@ -243,6 +244,7 @@ async function plantFromBagSeeds(landsToPlant: any[]): Promise<{
     // 不可种的种子服务端会拒绝，这里记录后继续下一优先种子。
     const skippedSeeds: any[] = [];
     const levelLockedSeeds: any[] = [];
+    const excludedSeeds: any[] = [];
     const usableSeeds = sortBagSeedsForPlanting(
         filteredForLevelAndCount.filter((seed: any) => {
             if (seed.count <= 0) {
@@ -251,6 +253,10 @@ async function plantFromBagSeeds(landsToPlant: any[]): Promise<{
             }
             if (seed.plantSize < 1) {
                 skippedSeeds.push({ seedId: seed.seedId, name: seed.name, reason: 'invalid_size', plantSize: seed.plantSize });
+                return false;
+            }
+            if (excludeIds.has(seed.seedId)) {
+                excludedSeeds.push({ seedId: seed.seedId, name: seed.name });
                 return false;
             }
             if (seed.requiredLevel > seed.stateLevel) {
@@ -270,6 +276,11 @@ async function plantFromBagSeeds(landsToPlant: any[]): Promise<{
     if (skippedSeeds.length > 0) {
         log('种植', `背包种子不可种植: ${skippedSeeds.map((s: any) => `${s.name}(${s.seedId}) ${s.reason}`).join('; ')}`, {
             module: 'farm', event: '种植种子', result: 'bag_seed_skip', strategy: 'bag_priority', skipped: skippedSeeds,
+        });
+    }
+    if (excludedSeeds.length > 0) {
+        log('种植', `背包种子已排除(用户设置): ${excludedSeeds.map((s: any) => `${s.name}(${s.seedId})`).join('; ')}`, {
+            module: 'farm', event: '种植种子', result: 'bag_seed_excluded', strategy: 'bag_priority', excluded: excludedSeeds, excludeIds: [...excludeIds],
         });
     }
 if (usableSeeds.length > 0) {

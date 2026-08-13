@@ -244,6 +244,7 @@ function setSystemConfig(config: Partial<SystemConfig> | undefined): SystemConfi
         platform: String(config.platform || 'qq').trim(),
         os: deviceInfo.os,
         deviceInfo,
+        publicBaseUrl: String(config.publicBaseUrl || '').trim(),
     };
     saveGlobalConfig();
     return { ...globalConfig.systemConfig };

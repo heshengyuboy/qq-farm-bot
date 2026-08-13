@@ -6,7 +6,7 @@ const { parentPort, workerData } = require('node:worker_threads');
 
 const { CONFIG } = require('../config/config');
 const { getLevelExpProgress, loadConfigs } = require('../config/gameConfig');
-const { getAutomation, getPreferredSeed, getConfigSnapshot, applyConfigSnapshot, getFertilizerBuyType, getFertilizerBuyCount } = require('../models/store');
+const { getAutomation, getPreferredSeed, getConfigSnapshot, applyConfigSnapshot, getFertilizerBuyType, getFertilizerBuyCount, getPrimaryAccountId } = require('../models/store');
 const { checkAndClaimEmails } = require('../services/email');
 const { getEmailDailyState } = require('../services/email');
 const { checkFarm, startFarmCheckLoop, stopFarmCheckLoop, refreshFarmCheckLoop, getLandsDetail, getAvailableSeeds, runFarmOperation, runFertilizerByConfig } = require('../services/farm');
@@ -129,6 +129,52 @@ let runtimeGeneration: number = 0;
 let lastDailyRunDate: string = '';
 const workerScheduler = createScheduler('worker');
 
+// 跨账号偷菜：等待主账号响应的 Promise
+let pendingCrossStealResolve: ((result: { ok: boolean; stolen: number; reason: string }) => void) | null = null;
+let pendingCrossStealTimeout: ReturnType<typeof setTimeout> | null = null;
+
+function requestPrimaryAccountSteal(): Promise<{ ok: boolean; stolen: number; reason: string }> {
+    return new Promise((resolve) => {
+        if (pendingCrossStealResolve) {
+            resolve({ ok: false, stolen: 0, reason: 'already_pending' });
+            return;
+        }
+        pendingCrossStealResolve = resolve;
+        // 10秒超时，超时则继续收获
+        pendingCrossStealTimeout = setTimeout(() => {
+            if (pendingCrossStealResolve) {
+                const r = pendingCrossStealResolve;
+                pendingCrossStealResolve = null;
+                pendingCrossStealTimeout = null;
+                r({ ok: false, stolen: 0, reason: 'timeout' });
+            }
+        }, 10000);
+        const state = getUserState();
+        const accountId = process.env.FARM_ACCOUNT_ID || '';
+        sendToMaster({
+            type: 'cross_account_steal_request',
+            accountId,
+            gid: toNum(state.gid),
+            accountName: statusData.name || '',
+        });
+    });
+}
+
+function handleCrossStealResponse(msg: any): void {
+    if (!pendingCrossStealResolve) return;
+    if (pendingCrossStealTimeout) {
+        clearTimeout(pendingCrossStealTimeout);
+        pendingCrossStealTimeout = null;
+    }
+    const r = pendingCrossStealResolve;
+    pendingCrossStealResolve = null;
+    r({
+        ok: !!msg.ok,
+        stolen: Number(msg.stolen) || 0,
+        reason: String(msg.reason || ''),
+    });
+}
+
 function isDailyRoutineEnabled(_auto: any): boolean {
     // 每日任务默认启用，不再检查开关
     return true;
@@ -236,6 +282,25 @@ async function runFarmTick(auto: any): Promise<void> {
         CONFIG.farmCheckIntervalMax || CONFIG.farmCheckInterval || 2000
     );
     try {
+        // 跨账号偷菜：收获前通知主账号偷菜
+        if (auto.farm && loginReady) {
+            const accountId = process.env.FARM_ACCOUNT_ID || '';
+            const primaryId = typeof getPrimaryAccountId === 'function' ? getPrimaryAccountId(accountId) : '';
+            if (primaryId) {
+                try {
+                    const stealResult = await requestPrimaryAccountSteal();
+                    if (stealResult.ok && stealResult.stolen > 0) {
+                        log('跨账号偷菜', `主账号已偷取 ${stealResult.stolen} 块作物，继续收获`, {
+                            module: 'cross_steal', event: '收获前通知', result: 'ok', stolen: stealResult.stolen,
+                        });
+                    }
+                } catch (e: any) {
+                    log('跨账号偷菜', `等待主账号偷菜失败: ${e.message}`, {
+                        module: 'cross_steal', event: '收获前通知', result: 'error',
+                    });
+                }
+            }
+        }
         if (auto.farm) await checkFarm();
         if (auto.task) await checkAndClaimTasks();
         if (auto.email) await checkAndClaimEmails();
@@ -446,6 +511,8 @@ onMasterMessage(async (msg: any) => {
             applyRuntimeConfig(msg.config || {}, true);
         } else if (msg.type === 'reload_config') {
             if (typeof loadConfigs === 'function') loadConfigs();
+        } else if (msg.type === 'cross_account_steal_response') {
+            handleCrossStealResponse(msg);
         }
     } catch (e: any) {
         sendToMaster({
@@ -678,6 +745,65 @@ function onKickout(payload: any): void {
     setTimeout(() => exitWorker(0), 300);
 }
 
+// 跨账号偷菜：主账号进入次级账号农场并偷取可偷作物
+async function stealFromTargetAccount(targetGid: number, targetName: string): Promise<{ stolen: number; ok: boolean; message: string }> {
+    if (!targetGid) return { stolen: 0, ok: false, message: '无效的目标GID' };
+
+    const { enterFriendFarm, leaveFriendFarm, stealHarvest } = require('../services/friend/api');
+    const { analyzeFriendLands } = require('../services/friend/visit-strategy');
+    const { getPlantBlacklist } = require('../models/store');
+    const state = getUserState();
+    const myGid = toNum(state.gid);
+    const accountId = process.env.FARM_ACCOUNT_ID || '';
+    const plantBlacklist: number[] = getPlantBlacklist(accountId);
+
+    let enterReply: any;
+    try {
+        enterReply = await enterFriendFarm(targetGid);
+    } catch (e: any) {
+        log('跨账号偷菜', `进入 ${targetName || `GID:${targetGid}`} 农场失败: ${e.message}`, {
+            module: 'cross_steal', event: '进入农场', result: 'error', targetGid,
+        });
+        return { stolen: 0, ok: false, message: e.message || '进入农场失败' };
+    }
+
+    try {
+        const lands: any[] = enterReply.lands || [];
+        if (lands.length === 0) {
+            return { stolen: 0, ok: true, message: '农场无土地' };
+        }
+
+        const status = analyzeFriendLands(lands, myGid, targetName, { plantBlacklist });
+        if (!status.stealable || status.stealable.length === 0) {
+            return { stolen: 0, ok: true, message: '无可偷作物' };
+        }
+
+        const targetLands: number[] = status.stealable;
+        let stolen = 0;
+        try {
+            await stealHarvest(targetGid, targetLands);
+            stolen = targetLands.length;
+        } catch {
+            // 批量失败，降级为单个
+            for (const landId of targetLands) {
+                try {
+                    await stealHarvest(targetGid, [landId]);
+                    stolen++;
+                } catch { /* ignore */ }
+                await new Promise(r => setTimeout(r, 300));
+            }
+        }
+
+        if (stolen > 0) {
+            try { await sellAllFruits(); } catch { /* ignore */ }
+        }
+
+        return { stolen, ok: true, message: `偷取 ${stolen} 块` };
+    } finally {
+        try { await leaveFriendFarm(targetGid); } catch { /* ignore */ }
+    }
+}
+
 // 处理来自 Admin 面板的直接调用请求 (如: 购买种子、开关设置等)
 async function handleApiCall(msg: any): Promise<void> {
     const { id, method, args } = msg;
@@ -801,6 +927,12 @@ async function handleApiCall(msg: any): Promise<void> {
             case 'getSchedulers':
                 result = getSchedulerRegistrySnapshot();
                 break;
+            case 'stealFromAccount': {
+                const targetGid = Number(args[0]) || 0;
+                const targetName = String(args[1] || '');
+                result = await stealFromTargetAccount(targetGid, targetName);
+                break;
+            }
             default:
                 error = 'Unknown method';
             }

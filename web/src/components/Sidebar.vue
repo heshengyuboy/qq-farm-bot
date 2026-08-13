@@ -473,9 +473,9 @@ async function copyToken() {
             <div class="farm-avatar-ring relative h-9 w-9 shrink-0 overflow-hidden rounded-full shadow-md" style="background: linear-gradient(135deg, var(--theme-primary), var(--theme-grass, #4CAF50)); padding: 2px;">
               <div class="h-full w-full overflow-hidden rounded-full bg-gray-200 dark:bg-gray-600">
                 <img
-                  :src="userStore.avatar || 'https://free.picui.cn/free/2026/03/10/69affe5755149.jpg'"
+                  :src="userStore.avatar || 'https://avatars.githubusercontent.com/u/24651858?v=4&size=64'"
                   class="h-full w-full object-cover"
-                  @error="(e) => (e.target as HTMLImageElement).src = 'https://free.picui.cn/free/2026/03/10/69affe5755149.jpg'"
+                  @error="(e) => (e.target as HTMLImageElement).src = 'https://avatars.githubusercontent.com/u/24651858?v=4&size=64'"
                 >
               </div>
               <!-- Admin crown badge -->

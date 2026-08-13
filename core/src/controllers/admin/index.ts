@@ -10,7 +10,7 @@ const path = require('node:path');
 const express = require('express');
 
 const { CONFIG } = require('../../config/config');
-const { getResourcePath } = require('../../config/runtime-paths');
+const { getResourcePath, getDataDir } = require('../../config/runtime-paths');
 const { createModuleLogger } = require('../../services/logger');
 
 const { createAdminContext } = require('./context');
@@ -72,6 +72,7 @@ function startAdminServer(dataProvider: any): void {
         app.get('/', (_req: any, res: any) => res.send('web build not found. Please build the web project.'));
     }
     app.use('/game-config', express.static(getResourcePath('gameConfig')));
+    app.use('/tmp-images', express.static(path.join(getDataDir(), 'tmp')));
 
     // Mount route modules
     mountAuthRoutes(app, ctx);
@@ -85,7 +86,7 @@ function startAdminServer(dataProvider: any): void {
 
     // SPA fallback
     app.get('*', (req: any, res: any) => {
-        if (req.path.startsWith('/api') || req.path.startsWith('/game-config')) {
+        if (req.path.startsWith('/api') || req.path.startsWith('/game-config') || req.path.startsWith('/tmp-images')) {
              return res.status(404).json({ ok: false, error: 'Not Found' });
         }
         if (fs.existsSync(webDist)) {

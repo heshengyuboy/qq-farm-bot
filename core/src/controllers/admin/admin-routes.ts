@@ -98,8 +98,8 @@ function mountAdminRoutes(app: Application, ctx: AdminContext): void {
     // 保存系统配置
     app.post('/api/admin/system-config', authRequired, adminRequired, (req: Request, res: Response) => {
         try {
-            const { serverUrl, clientVersion, platform, os, deviceInfo } = req.body || {};
-            const newConfig = { serverUrl, clientVersion, platform, os, deviceInfo };
+            const { serverUrl, clientVersion, platform, os, deviceInfo, publicBaseUrl } = req.body || {};
+            const newConfig = { serverUrl, clientVersion, platform, os, deviceInfo, publicBaseUrl };
             const saved = store.setSystemConfig(newConfig);
             updateRuntimeConfig(saved);
             const current = getRuntimeConfig();

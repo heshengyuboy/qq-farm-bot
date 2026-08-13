@@ -3,13 +3,18 @@ const { fork } = require('node:child_process');
 const path = require('node:path');
 const { Worker } = require('node:worker_threads');
 const store = require('../models/store');
+const { CONFIG } = require('../config/config');
 const { updateRuntimeConfig, getRuntimeConfig, getDefaultSystemConfig } = require('../config/config');
 const { sendPushooMessage } = require('../services/push');
 const { MiniProgramLoginSession } = require('../services/qrlogin');
+const { WxLoginService } = require('../services/wx-login/service');
+const wxLoginService = new WxLoginService();
 const { createDataProvider } = require('./data-provider');
 const { createReloginReminderService } = require('./relogin-reminder');
 const { createRuntimeState } = require('./runtime-state');
 const { createWorkerManager } = require('./worker-manager');
+const { createWxAutoReloginService } = require('./wx-auto-relogin');
+const { getCredentials: _getWxCredentials, setCredentials: _setWxCredentials } = require('../services/wx-login/wx-credential-store');
 
 const OPERATION_KEYS = ['harvest', 'farming', 'fertilize', 'plant', 'steal', 'helpFarming', 'taskClaim', 'sell', 'upgrade'];
 
@@ -59,6 +64,8 @@ function createRuntimeEngine(options: RuntimeEngineOptions = {}) {
     const reloginReminder = createReloginReminderService({
         store,
         miniProgramLoginSession: MiniProgramLoginSession,
+        wxLoginService,
+        adminPort: CONFIG.adminPort || 3007,
         sendPushooMessage,
         log,
         addAccountLog,
@@ -71,6 +78,18 @@ function createRuntimeEngine(options: RuntimeEngineOptions = {}) {
         getOfflineAutoDeleteMs,
         triggerOfflineReminder,
     } = reloginReminder;
+
+    const wxAutoRelogin = createWxAutoReloginService({
+        getCredentials: _getWxCredentials,
+        setCredentials: _setWxCredentials,
+        addOrUpdateAccount: store.addOrUpdateAccount,
+        getAccounts: store.getAccounts,
+        restartWorker: (account: any) => {
+            if (workerControls.restartWorker) workerControls.restartWorker(account);
+        },
+        log,
+        addAccountLog,
+    });
 
     const { startWorker, stopWorker, restartWorker, callWorkerApi } = createWorkerManager({
         fork,
@@ -87,6 +106,7 @@ function createRuntimeEngine(options: RuntimeEngineOptions = {}) {
         buildConfigSnapshotForAccount,
         getOfflineAutoDeleteMs,
         triggerOfflineReminder,
+        wxAutoRelogin,
         addOrUpdateAccount: store.addOrUpdateAccount,
         deleteAccount: store.deleteAccount,
         onStatusSync: (accountId: string, status: any, accountName?: string) => {

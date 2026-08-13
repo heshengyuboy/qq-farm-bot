@@ -18,6 +18,8 @@ export interface WxLoginSession {
     oauthCode?: string;
     openid?: string;
     loginBuffer?: string;
+    accessToken?: string;
+    refreshToken?: string;
 }
 
 interface HttpResult {
@@ -118,13 +120,14 @@ export class WxLoginService {
         throw new Error('Unrecognized WeChat QR polling response');
     }
 
-    async confirm(session: WxLoginSession): Promise<{ openid: string; loginBuffer: string }> {
+    async confirm(session: WxLoginSession): Promise<{ openid: string; loginBuffer: string; accessToken: string; refreshToken: string }> {
         if (!session.oauthCode) throw new Error('Waiting for scan authorization');
         const params = new URLSearchParams({ login_type: 'WX', code: session.oauthCode, state: 'web' });
         const callback = await request(`${CALLBACK_URL}?${params}`, session.cookies);
         if (callback.status < 200 || callback.status >= 400) throw new Error(`WeChat authorization callback failed (HTTP ${callback.status})`);
         const openid = requiredCookie(session.cookies, 'openid');
         const accessToken = requiredCookie(session.cookies, 'accesstoken');
+        const refreshToken = session.cookies.get('refreshtoken') || '';
         const payload = JSON.stringify({ extInfo: { listS: { unionid: { value: [openid] }, user_id: { value: [openid] }, access_token: { value: [accessToken] } }, listI: { user_type: { value: [0] } } } });
         const timestamp = String(Date.now());
         const nonce = String(crypto.randomInt(1000, 10000));
@@ -140,7 +143,9 @@ export class WxLoginService {
         session.cookies.clear();
         session.openid = openid;
         session.loginBuffer = loginBuffer;
-        return { openid, loginBuffer };
+        session.accessToken = accessToken;
+        session.refreshToken = refreshToken;
+        return { openid, loginBuffer, accessToken, refreshToken };
     }
 
     async issueCode(session: WxLoginSession, appId: string): Promise<string> {
@@ -148,10 +153,99 @@ export class WxLoginService {
         return getNativeWxLoginCode(session.loginBuffer, appId);
     }
 
+    /**
+     * 使用 refresh_token 刷新 access_token，然后重新获取 login_buffer。
+     * 用于 login_buffer 过期但 refresh_token 仍有效的情况。
+     */
+    async refreshLoginBuffer(openid: string, refreshToken: string): Promise<{ loginBuffer: string; accessToken: string; refreshToken: string }> {
+        if (!openid) throw new Error('Missing openid for refresh');
+        if (!refreshToken) throw new Error('Missing refresh_token for refresh');
+
+        // Step 1: 用 refresh_token 刷新 access_token
+        const refreshParams = new URLSearchParams({
+            appid: OAUTH_APP_ID,
+            grant_type: 'refresh_token',
+            refresh_token: refreshToken,
+        });
+        const refreshUrl = `https://open.weixin.qq.com/connect/sns/oauth2/refresh_token?${refreshParams}`;
+        const cookies = new Map<string, string>();
+        const refreshResp = await request(refreshUrl, cookies);
+        if (refreshResp.status < 200 || refreshResp.status >= 300) {
+            throw new Error(`Refresh access_token failed (HTTP ${refreshResp.status})`);
+        }
+        const refreshBody = refreshResp.body.toString('utf8');
+        // 尝试从 JSON 响应或 cookie 中获取新 access_token
+        let newAccessToken = '';
+        let newRefreshToken = refreshToken;
+        try {
+            const json = JSON.parse(refreshBody);
+            newAccessToken = json.access_token || '';
+            newRefreshToken = json.refresh_token || refreshToken;
+        } catch {
+            // 如果不是 JSON，尝试从 cookie 中提取
+            newAccessToken = cookies.get('accesstoken') || '';
+            newRefreshToken = cookies.get('refreshtoken') || refreshToken;
+        }
+        if (!newAccessToken) throw new Error('Refresh did not return a new access_token');
+
+        // Step 2: 用新 access_token 获取 login_buffer
+        const payload = JSON.stringify({ extInfo: { listS: { unionid: { value: [openid] }, user_id: { value: [openid] }, access_token: { value: [newAccessToken] } }, listI: { user_type: { value: [0] } } } });
+        const timestamp = String(Date.now());
+        const nonce = String(crypto.randomInt(1000, 10000));
+        const signature = crypto.createHash('md5').update(`${payload}${timestamp}${LOGIN_BUFFER_ACCESS_KEY}${nonce}`).digest('hex');
+        const response = await request(LOGIN_BUFFER_URL, cookies, {
+            method: 'POST', body: payload,
+            headers: { 'Content-Type': 'application/json', 'Ual-Access-Businessid': 'pc_yyb_auth', 'Ual-Access-Timestamp': timestamp, 'Ual-Access-Nonce': nonce, 'Ual-Access-Signature': signature },
+        });
+        if (response.status < 200 || response.status >= 300) throw new Error(`Refresh login buffer failed (HTTP ${response.status})`);
+        const data = JSON.parse(response.body.toString('utf8'));
+        const loginBuffer = data?.code === 0 ? data?.ext_info?.list_s?.login_buffer?.value?.[0] : '';
+        if (typeof loginBuffer !== 'string' || !loginBuffer) throw new Error('Refresh login buffer response is invalid');
+        return { loginBuffer, accessToken: newAccessToken, refreshToken: newRefreshToken };
+    }
+
+    /**
+     * 使用持久化的 login_buffer 直接获取小程序 code（自动重登录的核心方法）。
+     * 如果 login_buffer 过期，尝试用 refresh_token 刷新。
+     */
+    async getCodeFromCredentials(
+        loginBuffer: string,
+        appId: string,
+        openid?: string,
+        refreshToken?: string,
+    ): Promise<{ code: string; refreshed?: boolean; newLoginBuffer?: string; newAccessToken?: string; newRefreshToken?: string }> {
+        // 先尝试直接用现有 login_buffer 获取 code
+        try {
+            const code = await getNativeWxLoginCode(loginBuffer, appId);
+            if (code) return { code };
+        } catch {}
+
+        // login_buffer 可能过期，尝试刷新
+        if (openid && refreshToken) {
+            try {
+                const refreshed = await this.refreshLoginBuffer(openid, refreshToken);
+                const code = await getNativeWxLoginCode(refreshed.loginBuffer, appId);
+                if (code) {
+                    return {
+                        code,
+                        refreshed: true,
+                        newLoginBuffer: refreshed.loginBuffer,
+                        newAccessToken: refreshed.accessToken,
+                        newRefreshToken: refreshed.refreshToken,
+                    };
+                }
+            } catch {}
+        }
+
+        throw new Error('Unable to get code: login_buffer expired and refresh failed');
+    }
+
     destroy(session: WxLoginSession): void {
         session.cookies.clear();
         session.oauthCode = undefined;
         session.openid = undefined;
         session.loginBuffer = undefined;
+        session.accessToken = undefined;
+        session.refreshToken = undefined;
     }
 }

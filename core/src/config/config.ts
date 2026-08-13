@@ -1,4 +1,4 @@
-﻿export {};
+export {};
 interface DeviceInfo {
     os: string;
     clientVersion: string;
@@ -22,6 +22,7 @@ interface SystemConfig {
     platform: string;
     os: string;
     deviceInfo: DeviceInfo;
+    publicBaseUrl: string;
 }
 
 interface RuntimeConfig extends SystemConfig {
@@ -136,6 +137,7 @@ const DEFAULT_SYSTEM_CONFIG: SystemConfig = {
     platform: 'qq',
     os: DEFAULT_DEVICE_INFO.os,
     deviceInfo: { ...DEFAULT_DEVICE_INFO },
+    publicBaseUrl: '',
 };
 
 const CONFIG: RuntimeConfig = {
@@ -144,6 +146,7 @@ const CONFIG: RuntimeConfig = {
     platform: DEFAULT_SYSTEM_CONFIG.platform,
     os: DEFAULT_SYSTEM_CONFIG.os,
     deviceInfo: { ...DEFAULT_DEVICE_INFO },
+    publicBaseUrl: '',
     heartbeatInterval: 25000,
     farmCheckInterval: 3000,
     friendCheckInterval: 12000,
@@ -187,6 +190,9 @@ function updateRuntimeConfig(newConfig: Partial<SystemConfig>): void {
         CONFIG.os = CONFIG.deviceInfo.os;
         CONFIG.clientVersion = CONFIG.deviceInfo.clientVersion;
     }
+    if (newConfig.publicBaseUrl !== undefined && typeof newConfig.publicBaseUrl === 'string') {
+        CONFIG.publicBaseUrl = newConfig.publicBaseUrl.trim();
+    }
 }
 
 function getRuntimeConfig(): SystemConfig {
@@ -196,6 +202,7 @@ function getRuntimeConfig(): SystemConfig {
         platform: CONFIG.platform,
         os: CONFIG.os,
         deviceInfo: { ...CONFIG.deviceInfo },
+        publicBaseUrl: CONFIG.publicBaseUrl,
     };
 }
 

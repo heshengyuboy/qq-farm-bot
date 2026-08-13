@@ -98,6 +98,8 @@ const DEFAULT_ACCOUNT_CONFIG: AccountConfig = {
     fertilizerBuyCheckIntervalMinutes: 60,
     bagSeedPriority: [],
     bagSeedFallbackStrategy: 'level',
+    bagSeedExcludeIds: [],
+    primaryAccountId: '',
 };
 
 const ALLOWED_AUTOMATION_KEYS: Set<string> = new Set(Object.keys(DEFAULT_ACCOUNT_CONFIG.automation));
@@ -144,6 +146,18 @@ function normalizeBagSeedFallbackStrategy(input: unknown, fallback: BagSeedFallb
     const strategy = String(input || '').trim();
     if (ALLOWED_BAG_SEED_FALLBACK_STRATEGIES.includes(strategy as BagSeedFallbackStrategy)) return strategy as BagSeedFallbackStrategy;
     return fallback;
+}
+
+function normalizeBagSeedExcludeIds(input: unknown): number[] {
+    if (!Array.isArray(input)) return [];
+    const normalized: number[] = [];
+    for (const item of input) {
+        const value = Number.parseInt(item as string, 10);
+        if (!Number.isFinite(value) || value <= 0) continue;
+        if (normalized.includes(value)) continue;
+        normalized.push(value);
+    }
+    return normalized;
 }
 
 function normalizeFertilizerLandTypes(input: unknown, fallback: FertilizerLandType[] = DEFAULT_FERTILIZER_LAND_TYPES): FertilizerLandType[] {
@@ -242,6 +256,8 @@ function cloneAccountConfig(base: Partial<AccountConfig> = DEFAULT_ACCOUNT_CONFI
         fertilizerBuyCheckIntervalMinutes: Math.max(1, Math.min(1440, Number(base.fertilizerBuyCheckIntervalMinutes) || 30)),
         bagSeedPriority: normalizeBagSeedPriority(base.bagSeedPriority),
         bagSeedFallbackStrategy: normalizeBagSeedFallbackStrategy(base.bagSeedFallbackStrategy),
+        bagSeedExcludeIds: normalizeBagSeedExcludeIds(base.bagSeedExcludeIds),
+        primaryAccountId: String(base.primaryAccountId || '').trim(),
     };
 }
 
@@ -356,6 +372,14 @@ function normalizeAccountConfig(input: unknown, fallback: AccountConfig = accoun
 
     if (src.bagSeedFallbackStrategy !== undefined && src.bagSeedFallbackStrategy !== null) {
         cfg.bagSeedFallbackStrategy = normalizeBagSeedFallbackStrategy(src.bagSeedFallbackStrategy, cfg.bagSeedFallbackStrategy);
+    }
+
+    if (src.bagSeedExcludeIds !== undefined && src.bagSeedExcludeIds !== null) {
+        cfg.bagSeedExcludeIds = normalizeBagSeedExcludeIds(src.bagSeedExcludeIds);
+    }
+
+    if (src.primaryAccountId !== undefined && src.primaryAccountId !== null) {
+        cfg.primaryAccountId = String(src.primaryAccountId || '').trim();
     }
 
     return cfg;
@@ -476,6 +500,7 @@ function loadGlobalConfig(): void {
                         deviceId: String(srcDevice.deviceId || 'DESKTOP-PC<WPC>').trim(),
                         userAgent: String(srcDevice.userAgent || '').trim(),
                     },
+                    publicBaseUrl: String(data.systemConfig.publicBaseUrl || '').trim(),
                 };
                 systemConfigMigrated = savedTopVersion !== deviceClientVersion
                     || savedDeviceVersion !== deviceClientVersion;
@@ -517,6 +542,7 @@ module.exports = {
     normalizeFriendsListCacheTtlSec,
     normalizeBagSeedPriority,
     normalizeBagSeedFallbackStrategy,
+    normalizeBagSeedExcludeIds,
     normalizeFertilizerLandTypes,
     normalizeTimeString,
     normalizeIntervals,

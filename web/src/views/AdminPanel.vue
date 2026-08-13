@@ -675,6 +675,7 @@ const localSystemConfig = ref({
   clientVersion: '',
   platform: 'qq',
   os: 'Windows',
+  publicBaseUrl: '',
   deviceInfo: {
     os: 'Windows',
     clientVersion: '',
@@ -691,6 +692,7 @@ const defaultSystemConfig = ref({
   clientVersion: '',
   platform: 'qq',
   os: 'Windows',
+  publicBaseUrl: '',
   deviceInfo: {
     os: 'Windows',
     clientVersion: '',
@@ -758,6 +760,7 @@ async function loadSystemConfig() {
           clientVersion: def.clientVersion || '',
           platform: def.platform || 'qq',
           os: def.os || 'Windows',
+          publicBaseUrl: def.publicBaseUrl || '',
           deviceInfo: def.deviceInfo ? { ...def.deviceInfo } : { ...defaultSystemConfig.value.deviceInfo },
         }
       }
@@ -768,6 +771,7 @@ async function loadSystemConfig() {
           clientVersion: saved.clientVersion || '',
           platform: saved.platform || 'qq',
           os: saved.os || 'Windows',
+          publicBaseUrl: saved.publicBaseUrl || '',
           deviceInfo: saved.deviceInfo ? { ...saved.deviceInfo } : { ...localSystemConfig.value.deviceInfo },
         }
       } else {
@@ -778,6 +782,7 @@ async function loadSystemConfig() {
           clientVersion: def.clientVersion || '',
           platform: def.platform || 'qq',
           os: def.os || 'Windows',
+          publicBaseUrl: def.publicBaseUrl || '',
           deviceInfo: { ...def.deviceInfo },
         }
       }
@@ -825,6 +830,7 @@ async function handleResetSystemConfig() {
         clientVersion: saved.clientVersion || '',
         platform: saved.platform || 'qq',
         os: saved.os || 'Windows',
+        publicBaseUrl: saved.publicBaseUrl || '',
         deviceInfo: saved.deviceInfo ? { ...saved.deviceInfo } : { ...localSystemConfig.value.deviceInfo },
       }
       showAlert('系统配置已重置为默认值', 'primary')
@@ -1566,6 +1572,16 @@ onMounted(() => {
                   placeholder="wss://..."
                   class="col-span-2"
                 />
+                <BaseInput
+                  v-model="localSystemConfig.publicBaseUrl"
+                  label="公网访问地址"
+                  type="text"
+                  placeholder="http://your-domain:3007"
+                  class="col-span-2"
+                />
+                <p class="-mt-1 col-span-2 text-xs text-gray-400 dark:text-gray-500">
+                  用于推送消息中的图片链接等外部访问场景，留空则默认使用 http://localhost:端口
+                </p>
                 <div class="flex flex-col gap-1.5">
                   <label class="text-sm text-gray-700 font-medium dark:text-gray-300">平台</label>
                   <div class="flex gap-2">

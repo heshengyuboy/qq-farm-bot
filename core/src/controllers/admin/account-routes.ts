@@ -7,9 +7,14 @@ import type { AdminContext } from './context';
  */
 
 const store = require('../../models/store');
+const fs = require('node:fs');
+const path = require('node:path');
+const { getDataDir } = require('../../config/runtime-paths');
 const { addOrUpdateAccount, deleteAccount } = store;
 const { findAccountByRef } = require('../../services/account-resolver');
 const userStore = require('../../models/user-store');
+const { bindWxCredentialsToAccount } = require('./wx-login-routes');
+const { deleteCredentials: _deleteWxCredentials } = require('../../services/wx-login/wx-credential-store');
 
 const {
     getAccId,
@@ -144,6 +149,10 @@ function mountAccountRoutes(app: Application, ctx: AdminContext): void {
                     accountId,
                     accountName
                 );
+                // 微信平台：将登录凭据关联到账号 ID，用于后续自动重登录
+                if (String(payload.platform || '').toLowerCase() === 'wx' && payload.code) {
+                    try { bindWxCredentialsToAccount(accountId, String(payload.code)); } catch {}
+                }
             }
             // 如果是新增，自动启动
             if (!isUpdate) {
@@ -171,6 +180,8 @@ function mountAccountRoutes(app: Application, ctx: AdminContext): void {
             const before = ctx.provider.getAccounts();
             const target = findAccountByRef(before.accounts || [], req.params.id);
             ctx.provider.stopAccount(resolvedId);
+            // 删除微信凭据
+            try { _deleteWxCredentials(resolvedId); } catch {}
             const data = deleteAccount(resolvedId);
             if (ctx.provider.addAccountLog) {
                 ctx.provider.addAccountLog('delete', `删除账号: ${(target && target.name) || req.params.id}`, resolvedId, target ? target.name : '');
@@ -379,6 +390,7 @@ function mountAccountRoutes(app: Application, ctx: AdminContext): void {
             const token = String(cfg.token || '').trim();
             const titleBase = String(cfg.title || '账号下线提醒').trim();
             const msgBase = String(cfg.msg || '账号下线').trim();
+            const testPlatform = String(cfg.testPlatform || 'qq').trim().toLowerCase();
 
             if (!channel) {
                 return res.status(400).json({ ok: false, error: '推送渠道不能为空' });
@@ -390,12 +402,48 @@ function mountAccountRoutes(app: Application, ctx: AdminContext): void {
             const now = new Date();
             const ts = now.toISOString().replace('T', ' ').slice(0, 19);
             const { sendPushooMessage } = require('../../services/push');
+            const testPlatformLabel = testPlatform === 'wx' ? '微信' : 'QQ';
+            let testContent = `${msgBase}\n\n这是一条下线提醒测试消息。\n登录平台: ${testPlatformLabel}\n时间: ${ts}`;
+
+            if (testPlatform === 'wx') {
+                try {
+                    const { WxLoginService } = require('../../services/wx-login/service');
+                    const wxLogin = new WxLoginService();
+                    const { session, qr } = await wxLogin.createQrSession();
+                    const tmpDir = path.join(getDataDir(), 'tmp');
+                    if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+                    const fileName = `wx-qr-test-${Date.now()}.jpg`;
+                    const filePath = path.join(tmpDir, fileName);
+                    fs.writeFileSync(filePath, qr);
+                    const adminPort = Number(process.env.ADMIN_PORT) || 3007;
+                    const { getRuntimeConfig: _getRc } = require('../../config/config');
+                    const _rc = typeof _getRc === 'function' ? _getRc() : null;
+                    const _baseUrl = (_rc && _rc.publicBaseUrl) ? String(_rc.publicBaseUrl).trim().replace(/\/+$/, '') : `http://localhost:${adminPort}`;
+                    const imageUrl = `${_baseUrl}/tmp-images/${fileName}`;
+                    testContent = `${msgBase}\n\n请用微信扫描下方二维码完成重登录：\n![重登录二维码](${imageUrl})\n\n注意：二维码有效期约 2 分钟\n时间: ${ts}`;
+                    try { wxLogin.destroy(session); } catch {}
+                } catch (e: any) {
+                    testContent = `${msgBase}\n\n微信扫码重登录二维码生成失败: ${e.message}\n时间: ${ts}`;
+                }
+            } else {
+                try {
+                    const { MiniProgramLoginSession } = require('../../services/qrlogin');
+                    const qrResult = await MiniProgramLoginSession.requestLoginCode();
+                    const qqUrl = String((qrResult && (qrResult.url || qrResult.loginUrl)) || '').trim();
+                    if (qqUrl) {
+                        testContent = `${msgBase}\n\n重登录二维码链接: ${qqUrl}\n\n这是一条下线提醒测试消息。\n时间: ${ts}`;
+                    }
+                } catch (e: any) {
+                    testContent = `${msgBase}\n\nQQ重登录二维码生成失败: ${e.message}\n时间: ${ts}`;
+                }
+            }
+
             const ret = await sendPushooMessage({
                 channel,
                 endpoint,
                 token,
                 title: `${titleBase}（测试）`,
-                content: `${msgBase}\n\n这是一条下线提醒测试消息。\n时间: ${ts}`,
+                content: testContent,
             });
 
             if (!ret) {
@@ -444,12 +492,14 @@ function mountAccountRoutes(app: Application, ctx: AdminContext): void {
             const fertilizerBuyCheckIntervalMinutes = id && (typeof store.getFertilizerBuyCheckIntervalMinutes === 'function') ? store.getFertilizerBuyCheckIntervalMinutes(id) : 30;
             const bagSeedPriority = id && (typeof store.getBagSeedPriority === 'function') ? store.getBagSeedPriority(id) : [];
             const bagSeedFallbackStrategy = id && (typeof store.getBagSeedFallbackStrategy === 'function') ? store.getBagSeedFallbackStrategy(id) : 'level';
+            const bagSeedExcludeIds = id && (typeof store.getBagSeedExcludeIds === 'function') ? store.getBagSeedExcludeIds(id) : [];
+            const primaryAccountId = id && (typeof store.getPrimaryAccountId === 'function') ? store.getPrimaryAccountId(id) : '';
             const ui = store.getUI();
             // 获取用户隔离的下线提醒配置
             const offlineReminder = store.getOfflineReminder && currentUser
                 ? store.getOfflineReminder(currentUser.username)
                 : { channel: 'webhook', reloginUrlMode: 'none', endpoint: '', token: '', title: '账号下线提醒', msg: '账号下线', offlineDeleteSec: 0 };
-            res.json({ ok: true, data: { intervals, strategy, preferredSeed, friendQuietHours, automation, stealDelaySeconds, plantOrderRandom, plantDelaySeconds, fertilizerBuyOrganicCount, fertilizerBuyOrganicThresholdHours, fertilizerBuyNormalCount, fertilizerBuyNormalThresholdHours, fertilizerBuyCheckIntervalMinutes, bagSeedPriority, bagSeedFallbackStrategy, ui, offlineReminder } });
+            res.json({ ok: true, data: { intervals, strategy, preferredSeed, friendQuietHours, automation, stealDelaySeconds, plantOrderRandom, plantDelaySeconds, fertilizerBuyOrganicCount, fertilizerBuyOrganicThresholdHours, fertilizerBuyNormalCount, fertilizerBuyNormalThresholdHours, fertilizerBuyCheckIntervalMinutes, bagSeedPriority, bagSeedFallbackStrategy, bagSeedExcludeIds, primaryAccountId, ui, offlineReminder } });
         } catch (e: any) {
             res.status(500).json({ ok: false, error: e.message });
         }

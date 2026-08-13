@@ -7,6 +7,7 @@ import type { ScanStatus, WxLoginSession } from '../../services/wx-login/service
 export {};
 
 const { createAuthRequired } = require('./middleware');
+const { setCredentials: _storeWxCredentials } = require('../../services/wx-login/wx-credential-store');
 
 const TARGET_APP_ID = 'wx5306c5978fdb76e4';
 const TASK_TTL_MS = 110_000;
@@ -14,6 +15,10 @@ type Status = ScanStatus | 'ready_for_code' | 'failed';
 interface Task { id: string; owner: string; createdAt: number; status: Status; session: WxLoginSession; qr: Buffer; code?: string; pending?: Promise<void>; }
 const tasks = new Map<string, Task>();
 const wxLogin = new WxLoginService();
+
+// 临时凭据缓存：以 login code 为 key，在账号创建时关联到 account ID
+const pendingCredentials = new Map<string, { openid: string; loginBuffer: string; accessToken: string; refreshToken: string; createdAt: number }>();
+const PENDING_CRED_TTL = 300_000; // 5 分钟
 
 function destroy(task: Task): void { wxLogin.destroy(task.session); task.code = undefined; tasks.delete(task.id); }
 function publicTask(task: Task) { return { task_id: task.id, app_id: TARGET_APP_ID, status: task.status, expires_at: Math.floor((task.createdAt + TASK_TTL_MS) / 1000) }; }
@@ -35,7 +40,41 @@ async function confirm(task: Task): Promise<void> {
     await wxLogin.confirm(task.session);
     task.status = 'ready_for_code';
 }
-async function consumeCode(task: Task): Promise<void> { if (task.status !== 'ready_for_code') throw new Error('Login code is not ready'); task.code = await wxLogin.issueCode(task.session, TARGET_APP_ID); }
+async function consumeCode(task: Task): Promise<void> {
+    if (task.status !== 'ready_for_code') throw new Error('Login code is not ready');
+    task.code = await wxLogin.issueCode(task.session, TARGET_APP_ID);
+    // 持久化凭据到临时缓存，等待账号创建时关联
+    if (task.code && task.session.loginBuffer) {
+        pendingCredentials.set(task.code, {
+            openid: task.session.openid || '',
+            loginBuffer: task.session.loginBuffer,
+            accessToken: task.session.accessToken || '',
+            refreshToken: task.session.refreshToken || '',
+            createdAt: Date.now(),
+        });
+    }
+}
+
+/**
+ * 将微信登录凭据关联到账号 ID（在账号创建/更新时调用）。
+ * 从临时缓存中查找凭据，持久化到 wx-credentials.json。
+ */
+function bindWxCredentialsToAccount(accountId: string, code: string): void {
+    // 清理过期缓存
+    const now = Date.now();
+    for (const [k, v] of pendingCredentials) {
+        if (now - v.createdAt > PENDING_CRED_TTL) pendingCredentials.delete(k);
+    }
+    const cred = pendingCredentials.get(code);
+    if (!cred) return;
+    _storeWxCredentials(accountId, {
+        openid: cred.openid,
+        loginBuffer: cred.loginBuffer,
+        accessToken: cred.accessToken,
+        refreshToken: cred.refreshToken,
+    });
+    pendingCredentials.delete(code);
+}
 
 function mountWxLoginRoutes(app: Application, ctx: AdminContext): void {
     app.use('/api/wx-login', createAuthRequired(ctx));
@@ -46,4 +85,4 @@ function mountWxLoginRoutes(app: Application, ctx: AdminContext): void {
     app.post('/api/wx-login/tasks/:taskId/confirm', async (req, res) => { const task = findTask(req, res); if (!task) return; try { if (!task.pending) task.pending = confirm(task).finally(() => { task.pending = undefined; }); await task.pending; res.json({ ok: true, data: publicTask(task) }); } catch (error: any) { task.status = 'failed'; destroy(task); res.status(502).json({ ok: false, error: error.message }); } });
     app.post('/api/wx-login/tasks/:taskId/code', async (req, res) => { const task = findTask(req, res); if (!task) return; try { if (!task.pending) task.pending = consumeCode(task).finally(() => { task.pending = undefined; }); await task.pending; const data = { openid: task.session.openid, app_id: TARGET_APP_ID, code: task.code, err_msg: 'login:ok' }; destroy(task); res.json({ ok: true, data }); } catch (error: any) { task.status = 'failed'; destroy(task); res.status(502).json({ ok: false, error: error.message }); } });
 }
-module.exports = { mountWxLoginRoutes };
+module.exports = { mountWxLoginRoutes, bindWxCredentialsToAccount };

@@ -219,7 +219,9 @@ const localStrategySettings = ref({
   plantingStrategy: 'max_exp',
   preferredSeedId: 0,
   bagSeedPriority: [] as number[],
+  bagSeedExcludeIds: [] as number[],
   bagSeedFallbackStrategy: 'level',
+  primaryAccountId: '',
   stealDelaySeconds: 0,
   plantOrderRandom: false,
   plantDelaySeconds: 0,
@@ -245,6 +247,17 @@ const BAG_FALLBACK_STRATEGY_OPTIONS = [
   { label: '最大普通肥净利润/时', value: 'max_fert_profit' },
   { label: '优先种植种子', value: 'preferred' },
 ]
+
+const primaryAccountOptions = computed(() => {
+  const currentId = currentAccountId.value
+  const options: { label: string, value: string }[] = [{ label: '无（当前账号为主账号）', value: '' }]
+  for (const acc of accounts.value) {
+    if (acc.id === currentId) continue
+    const name = acc.name || acc.nick || acc.id
+    options.push({ label: `${name} (${acc.id})`, value: acc.id })
+  }
+  return options
+})
 
 interface BagSeedItem {
   seedId: number
@@ -312,6 +325,19 @@ const sortedBagSeeds = computed(() => {
     .map(seedId => itemMap.get(seedId))
     .filter((seed): seed is BagSeedItem => !!seed)
 })
+
+function isBagSeedExcluded(seedId: number): boolean {
+  return localStrategySettings.value.bagSeedExcludeIds.includes(seedId)
+}
+
+function toggleBagSeedExclude(seedId: number): void {
+  const arr = localStrategySettings.value.bagSeedExcludeIds
+  const idx = arr.indexOf(seedId)
+  if (idx >= 0)
+    arr.splice(idx, 1)
+  else
+    arr.push(seedId)
+}
 
 function isAccountConnected(accountId: string) {
   return String(runtimeStatus.value?.accountId || '') === String(accountId)
@@ -638,7 +664,9 @@ function syncLocalStrategySettings() {
       plantingStrategy: settings.value.plantingStrategy,
       preferredSeedId: settings.value.preferredSeedId,
       bagSeedPriority: settings.value.bagSeedPriority ?? [],
+      bagSeedExcludeIds: settings.value.bagSeedExcludeIds ?? [],
       bagSeedFallbackStrategy: settings.value.bagSeedFallbackStrategy ?? 'level',
+      primaryAccountId: settings.value.primaryAccountId ?? '',
       stealDelaySeconds: settings.value.stealDelaySeconds ?? 0,
       plantOrderRandom: !!settings.value.plantOrderRandom,
       plantDelaySeconds: settings.value.plantDelaySeconds ?? 0,
@@ -1295,6 +1323,17 @@ async function handleTestOffline() {
           </div>
 
           <div v-else class="space-y-4">
+            <div class="border border-blue-200 rounded-lg bg-blue-50/50 p-3 space-y-2 dark:border-blue-800/50 dark:bg-blue-900/20">
+              <BaseSelect
+                v-model="localStrategySettings.primaryAccountId"
+                label="主账号（偷菜优先）"
+                :options="primaryAccountOptions"
+              />
+              <p class="text-xs text-blue-600 dark:text-blue-400">
+                设置后，当前账号作物成熟时将先通知主账号偷菜，再执行收获。需要主账号与当前账号在游戏中互为好友。
+              </p>
+            </div>
+
             <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
               <BaseSelect
                 v-model="localStrategySettings.plantingStrategy"
@@ -1364,8 +1403,13 @@ async function handleTestOffline() {
                   <div
                     v-for="(seed, index) in sortedBagSeeds"
                     :key="seed.seedId"
-                    class="cartoon-card min-h-18 flex items-center gap-2 border border-amber-200 rounded-xl bg-white px-3 py-2.5 dark:border-amber-700/50 dark:bg-gray-800"
-                    :class="{ 'opacity-60 ring-2 ring-amber-400': draggingBagSeedId === seed.seedId }"
+                    class="cartoon-card min-h-18 flex items-center gap-2 border rounded-xl bg-white px-3 py-2.5 dark:bg-gray-800"
+                    :class="[
+                      { 'opacity-60 ring-2 ring-amber-400': draggingBagSeedId === seed.seedId },
+                      isBagSeedExcluded(seed.seedId)
+                        ? 'border-red-300 opacity-50 dark:border-red-700/50'
+                        : 'border-amber-200 dark:border-amber-700/50',
+                    ]"
                     draggable="true"
                     @dragstart="startBagSeedDrag(seed.seedId, $event)"
                     @dragend="endBagSeedDrag"
@@ -1382,6 +1426,12 @@ async function handleTestOffline() {
                         </div>
                         <span class="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-700 font-semibold dark:bg-amber-900/50 dark:text-amber-300">
                           {{ seed.plantSize }}x{{ seed.plantSize }}
+                        </span>
+                        <span
+                          v-if="isBagSeedExcluded(seed.seedId)"
+                          class="shrink-0 rounded bg-red-100 px-1.5 py-0.5 text-[10px] text-red-600 font-semibold dark:bg-red-900/50 dark:text-red-300"
+                        >
+                          已排除
                         </span>
                       </div>
                       <div class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
@@ -1402,6 +1452,16 @@ async function handleTestOffline() {
                         @click="moveBagSeed(seed.seedId, 1)"
                       >
                         <span class="text-sm">▼</span>
+                      </button>
+                      <button
+                        class="rounded p-1 transition"
+                        :class="isBagSeedExcluded(seed.seedId)
+                          ? 'text-red-500 hover:bg-red-50 hover:text-red-700 dark:hover:bg-red-900/30'
+                          : 'text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700'"
+                        :title="isBagSeedExcluded(seed.seedId) ? '取消排除' : '排除此种子'"
+                        @click="toggleBagSeedExclude(seed.seedId)"
+                      >
+                        <span class="text-sm">{{ isBagSeedExcluded(seed.seedId) ? '✕' : '✕' }}</span>
                       </button>
                     </div>
                   </div>

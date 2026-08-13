@@ -14,6 +14,7 @@ const {
     normalizeFriendsListCacheTtlSec,
     normalizeBagSeedPriority,
     normalizeBagSeedFallbackStrategy,
+    normalizeBagSeedExcludeIds,
     normalizeIntervals,
     normalizeTimeString,
     ALLOWED_PLANTING_STRATEGIES,
@@ -87,6 +88,7 @@ function getConfigSnapshot(accountId?: unknown): AccountConfig & { ui: typeof gl
         fertilizerBuyCheckIntervalMinutes: Math.max(1, Math.min(1440, Number(cfg.fertilizerBuyCheckIntervalMinutes) || 30)),
         bagSeedPriority: [...(cfg.bagSeedPriority || [])],
         bagSeedFallbackStrategy: cfg.bagSeedFallbackStrategy,
+        bagSeedExcludeIds: [...(cfg.bagSeedExcludeIds || [])],
         ui: { ...globalConfig.ui },
     } as any;
 }
@@ -250,6 +252,14 @@ function getBagSeedFallbackStrategy(accountId?: unknown): BagSeedFallbackStrateg
     return normalizeBagSeedFallbackStrategy(getAccountConfigSnapshot(accountId).bagSeedFallbackStrategy);
 }
 
+function getBagSeedExcludeIds(accountId?: unknown): number[] {
+    return [...(getAccountConfigSnapshot(accountId).bagSeedExcludeIds || [])];
+}
+
+function getPrimaryAccountId(accountId?: unknown): string {
+    return String(getAccountConfigSnapshot(accountId).primaryAccountId || '').trim();
+}
+
 function getIntervals(accountId?: unknown): IntervalConfig {
     return { ...getAccountConfigSnapshot(accountId).intervals };
 }
@@ -400,6 +410,8 @@ module.exports = {
     getPlantingStrategy,
     getBagSeedPriority,
     getBagSeedFallbackStrategy,
+    getBagSeedExcludeIds,
+    getPrimaryAccountId,
     getIntervals,
     getFriendQuietHours,
     getKnownFriendGids,

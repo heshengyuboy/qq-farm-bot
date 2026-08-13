@@ -25,52 +25,62 @@ if ! kill -0 "$app_pid" 2>/dev/null; then
     exit 0
 fi
 
-# Refuse to stop an unrelated process if the PID has been reused.
-if [[ -d "/proc/$app_pid" ]]; then
-    process_dir="$(readlink -f "/proc/$app_pid/cwd" 2>/dev/null || true)"
-    if [[ -n "$process_dir" && "$process_dir" != "$SCRIPT_DIR" ]]; then
-        echo "Refusing to stop PID $app_pid: its working directory is $process_dir."
-        exit 1
-    fi
-fi
-
-process_group="$(ps -o pgid= -p "$app_pid" 2>/dev/null | tr -d '[:space:]' || true)"
+# ---- Collect child PIDs (best-effort, cross-platform) ----
 declare -a process_tree=()
 
 collect_process_tree() {
     local parent_pid="$1"
     local child_pid
+    local children=""
 
-    while read -r child_pid; do
-        [[ -n "$child_pid" ]] || continue
-        collect_process_tree "$child_pid"
-    done < <(pgrep -P "$parent_pid" 2>/dev/null || true)
+    # Try pgrep first (Linux / most Git Bash installations)
+    if command -v pgrep >/dev/null 2>&1; then
+        children="$(pgrep -P "$parent_pid" 2>/dev/null || true)"
+    # Fallback: ps + awk (works in Git Bash on Windows)
+    elif command -v ps >/dev/null 2>&1; then
+        children="$(ps -o pid=,ppid= 2>/dev/null | awk -v ppid="$parent_pid" '$2 == ppid { print $1 }' || true)"
+    fi
+
+    # Recurse into children
+    if [ -n "$children" ]; then
+        for child_pid in $children; do
+            [ -n "$child_pid" ] || continue
+            collect_process_tree "$child_pid"
+        done
+    fi
 
     process_tree+=("$parent_pid")
 }
 
-if [[ "$process_group" == "$app_pid" ]]; then
-    kill -TERM -- "-$app_pid" 2>/dev/null || true
-else
-    collect_process_tree "$app_pid"
-    kill -TERM "${process_tree[@]}" 2>/dev/null || true
-fi
+collect_process_tree "$app_pid"
 
-for _ in {1..20}; do
+# ---- Graceful shutdown (SIGTERM) ----
+echo "Stopping qq-farm-bot (PID $app_pid)..."
+kill -TERM "${process_tree[@]}" 2>/dev/null || true
+
+# Wait up to 15 seconds for the process to exit
+for i in $(seq 1 30); do
     if ! kill -0 "$app_pid" 2>/dev/null; then
         rm -f "$PID_FILE"
         echo "Stopped qq-farm-bot."
         exit 0
     fi
-    sleep 0.5
+    sleep 0.5 2>/dev/null || sleep 1
 done
 
+# ---- Force kill (SIGKILL) ----
 echo "Graceful shutdown timed out; forcing qq-farm-bot to stop."
-if [[ "$process_group" == "$app_pid" ]]; then
-    kill -KILL -- "-$app_pid" 2>/dev/null || true
-else
-    kill -KILL "${process_tree[@]}" 2>/dev/null || true
-fi
+kill -KILL "${process_tree[@]}" 2>/dev/null || true
+
+# Wait a few more seconds for SIGKILL to take effect
+for i in $(seq 1 10); do
+    if ! kill -0 "$app_pid" 2>/dev/null; then
+        rm -f "$PID_FILE"
+        echo "Stopped qq-farm-bot."
+        exit 0
+    fi
+    sleep 0.5 2>/dev/null || sleep 1
+done
 
 rm -f "$PID_FILE"
-echo "Stopped qq-farm-bot."
+echo "Warning: process $app_pid may still be running."

@@ -61,6 +61,8 @@ export interface SettingsState {
   preferredSeedId: number
   bagSeedPriority: number[]
   bagSeedFallbackStrategy: string
+  bagSeedExcludeIds: number[]
+  primaryAccountId: string
   intervals: IntervalsConfig
   friendQuietHours: FriendQuietHoursConfig
   automation: AutomationConfig
@@ -81,6 +83,8 @@ type SaveableSettingsKey
     | 'preferredSeedId'
     | 'bagSeedPriority'
     | 'bagSeedFallbackStrategy'
+    | 'bagSeedExcludeIds'
+    | 'primaryAccountId'
     | 'intervals'
     | 'friendQuietHours'
     | 'automation'
@@ -100,6 +104,8 @@ const SAVEABLE_SETTINGS_KEYS: SaveableSettingsKey[] = [
   'preferredSeedId',
   'bagSeedPriority',
   'bagSeedFallbackStrategy',
+  'bagSeedExcludeIds',
+  'primaryAccountId',
   'intervals',
   'friendQuietHours',
   'automation',
@@ -119,6 +125,8 @@ function createDefaultSettings(): SettingsState {
     preferredSeedId: 0,
     bagSeedPriority: [],
     bagSeedFallbackStrategy: 'level',
+    bagSeedExcludeIds: [],
+    primaryAccountId: '',
     intervals: {},
     friendQuietHours: { enabled: false, start: '23:00', end: '07:00' },
     automation: {},
@@ -174,6 +182,8 @@ export const useSettingStore = defineStore('setting', () => {
       preferredSeedId: data.preferredSeed || defaults.preferredSeedId,
       bagSeedPriority: cloneValue(data.bagSeedPriority ?? defaults.bagSeedPriority),
       bagSeedFallbackStrategy: data.bagSeedFallbackStrategy ?? defaults.bagSeedFallbackStrategy,
+      bagSeedExcludeIds: cloneValue(data.bagSeedExcludeIds ?? defaults.bagSeedExcludeIds),
+      primaryAccountId: data.primaryAccountId ?? defaults.primaryAccountId,
       intervals: cloneValue(data.intervals || defaults.intervals),
       friendQuietHours: cloneValue(data.friendQuietHours || defaults.friendQuietHours),
       automation: cloneValue(data.automation || defaults.automation),

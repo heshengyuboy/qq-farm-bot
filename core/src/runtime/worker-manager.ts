@@ -16,6 +16,7 @@ interface WorkerManagerOptions {
     buildConfigSnapshotForAccount: (accountId: string) => any;
     getOfflineAutoDeleteMs: (username?: string) => number;
     triggerOfflineReminder: (payload: any) => void;
+    wxAutoRelogin?: { tryAutoRelogin: (accountId: string) => Promise<{ ok: boolean; reason?: string }> };
     addOrUpdateAccount: (acc: any) => any;
     deleteAccount: (id: string) => void;
     onStatusSync?: (accountId: string, status: any, accountName?: string) => void;
@@ -38,6 +39,7 @@ function createWorkerManager(options: WorkerManagerOptions) {
         buildConfigSnapshotForAccount,
         getOfflineAutoDeleteMs,
         triggerOfflineReminder,
+        wxAutoRelogin,
         addOrUpdateAccount,
         deleteAccount,
         onStatusSync,
@@ -110,6 +112,7 @@ function createWorkerManager(options: WorkerManagerOptions) {
             reqId: 1,
             name: account.name,
             username: account.username || '',
+            platform: account.platform || 'qq',
             stopping: false,
             disconnectedSince: 0,
             autoDeleteTriggered: false,
@@ -227,7 +230,7 @@ function createWorkerManager(options: WorkerManagerOptions) {
         return error;
     }
 
-    function handleWorkerMessage(accountId: string, sourceProcess: any, msg: any): void {
+    async function handleWorkerMessage(accountId: string, sourceProcess: any, msg: any): Promise<void> {
         const worker = workers[accountId];
         if (!worker || worker.process !== sourceProcess) return;
 
@@ -265,8 +268,27 @@ function createWorkerManager(options: WorkerManagerOptions) {
                 const offlineMs = now - worker.disconnectedSince;
                 const autoDeleteMs = getOfflineAutoDeleteMs(worker.username);
                 if (!worker.autoDeleteTriggered && offlineMs >= autoDeleteMs) {
-                    worker.autoDeleteTriggered = true;
                     const offlineMin = Math.floor(offlineMs / 60000);
+
+                    // 微信账号：先尝试自动重登录，成功则跳过删除
+                    if (worker.platform === 'wx' && wxAutoRelogin) {
+                        try {
+                            log('系统', `账号 ${worker.name} 离线 ${offlineMin} 分钟，尝试微信自动重登录...`, { accountId, accountName: worker.name });
+                            const reloginResult = await wxAutoRelogin.tryAutoRelogin(accountId);
+                            if (reloginResult.ok) {
+                                log('系统', `账号 ${worker.name} 微信自动重登录成功，恢复连接`, { accountId, accountName: worker.name });
+                                worker.disconnectedSince = 0;
+                                worker.autoDeleteTriggered = false;
+                                worker.wsError = null;
+                                return; // 跳过后续的删除流程
+                            }
+                            log('系统', `账号 ${worker.name} 微信自动重登录失败: ${reloginResult.reason}`, { accountId, accountName: worker.name });
+                        } catch (e: any) {
+                            log('错误', `账号 ${worker.name} 微信自动重登录异常: ${e.message}`, { accountId, accountName: worker.name });
+                        }
+                    }
+
+                    worker.autoDeleteTriggered = true;
                     log('系统', `账号 ${worker.name} 持续离线 ${offlineMin} 分钟，自动删除账号信息`);
                     triggerOfflineReminder({
                         accountId,
@@ -274,6 +296,7 @@ function createWorkerManager(options: WorkerManagerOptions) {
                         username: worker.username,
                         reason: 'offline_timeout',
                         offlineMs,
+                        platform: worker.platform,
                     });
                     addAccountLog(
                         'offline_delete',
@@ -336,6 +359,7 @@ function createWorkerManager(options: WorkerManagerOptions) {
                 accountName: worker.name,
                 reason: `kickout:${reason}`,
                 offlineMs: 0,
+                platform: worker.platform,
             });
             addAccountLog('kickout_stop', `账号 ${worker.name} 被踢下线，已自动停止`, accountId, worker.name, { reason });
             stopWorker(accountId);
@@ -354,28 +378,85 @@ function createWorkerManager(options: WorkerManagerOptions) {
                 }
                 worker.requests.clear();
             }
-            log('系统', `账号 ${worker.name} 连接已断开，已停止运行并等待重新扫码`, {
+            log('系统', `账号 ${worker.name} 连接已断开 (source=${source}, code=${code}, phase=${phase})`, {
                 accountId: String(accountId),
                 accountName: worker.name,
                 source,
                 code,
                 phase,
             });
-            triggerOfflineReminder({
-                accountId,
-                accountName: worker.name,
-                username: worker.username,
-                reason: `disconnect:${source}:${phase}:${code}`,
-                offlineMs: 0,
-            });
-            addAccountLog(
-                'disconnect_stop',
-                `账号 ${worker.name} 连接已断开，已停止运行并等待重新扫码`,
-                accountId,
-                worker.name,
-                { source, code, reason, phase, connectionId: Number(msg.connectionId) || 0 },
-            );
-            stopWorker(accountId);
+
+            // 微信账号：立即尝试自动重登录（无需等待离线超时）
+            if (worker.platform === 'wx' && wxAutoRelogin) {
+                const wxAccount = { ...worker, id: accountId, name: worker.name };
+                stopWorker(accountId);
+
+                const tryWxRelogin = async (attempt: number, maxAttempts: number) => {
+                    try {
+                        log('系统', `账号 ${worker.name} 微信自动重登录尝试 ${attempt}/${maxAttempts}...`, { accountId, accountName: worker.name, attempt });
+                        const reloginResult = await wxAutoRelogin.tryAutoRelogin(accountId);
+                        if (reloginResult.ok) {
+                            log('系统', `账号 ${worker.name} 微信自动重登录成功 (尝试 ${attempt}/${maxAttempts})`, { accountId, accountName: worker.name });
+                            return;
+                        }
+                        log('系统', `账号 ${worker.name} 微信自动重登录失败: ${reloginResult.reason} (${attempt}/${maxAttempts})`, { accountId, accountName: worker.name });
+                    } catch (e: any) {
+                        log('错误', `账号 ${worker.name} 微信自动重登录异常: ${e.message} (${attempt}/${maxAttempts})`, { accountId, accountName: worker.name });
+                    }
+
+                    if (attempt < maxAttempts) {
+                        // 失败后延迟重试：第1次等30秒，第2次等60秒，第3次等120秒
+                        const delaySec = 30 * Math.pow(2, attempt - 1);
+                        log('系统', `账号 ${worker.name} ${delaySec}秒后进行第 ${attempt + 1} 次重登录尝试...`, { accountId, accountName: worker.name });
+                        managerScheduler.setTimeoutTask(`wx_relogin_retry_${accountId}`, delaySec * 1000, () => {
+                            tryWxRelogin(attempt + 1, maxAttempts);
+                        });
+                    } else {
+                        // 所有重登录尝试均失败，回退到手动扫码
+                        log('系统', `账号 ${worker.name} 微信自动重登录全部失败 (${maxAttempts} 次)，需要重新扫码登录`, { accountId, accountName: worker.name });
+                        triggerOfflineReminder({
+                            accountId,
+                            accountName: worker.name,
+                            username: worker.username,
+                            reason: `disconnect:${source}:${phase}:${code}`,
+                            offlineMs: 0,
+                            platform: worker.platform,
+                        });
+                        addAccountLog(
+                            'disconnect_stop',
+                            `账号 ${worker.name} 连接断开且自动重登录失败，需要重新扫码`,
+                            accountId,
+                            worker.name,
+                            { source, code, reason, phase },
+                        );
+                    }
+                };
+
+                // 首次重登录尝试（断开后立即执行）
+                tryWxRelogin(1, 4);
+            } else {
+                // 非微信账号：保持原有逻辑
+                log('系统', `账号 ${worker.name} 连接已断开，已停止运行并等待重新扫码`, {
+                    accountId: String(accountId),
+                    accountName: worker.name,
+                });
+                triggerOfflineReminder({
+                    accountId,
+                    accountName: worker.name,
+                    username: worker.username,
+                    reason: `disconnect:${source}:${phase}:${code}`,
+                    offlineMs: 0,
+                    platform: worker.platform,
+                });
+                addAccountLog(
+                    'disconnect_stop',
+                    `账号 ${worker.name} 连接已断开，已停止运行并等待重新扫码`,
+                    accountId,
+                    worker.name,
+                    { source, code, reason, phase, connectionId: Number(msg.connectionId) || 0 },
+                );
+                stopWorker(accountId);
+            }
         } else if (msg.type === 'api_response') {
             const { id, result, error } = msg;
             managerScheduler.clear(`api_timeout_${accountId}_${id}`);
@@ -402,6 +483,62 @@ function createWorkerManager(options: WorkerManagerOptions) {
                     worker_process.process.send({ type: 'config_sync', config: buildConfigSnapshotForAccount(accountId) });
                 }
             }
+        } else if (msg.type === 'cross_account_steal_request') {
+            // 次级账号请求主账号偷菜
+            const secondaryAccountId = String(msg.accountId || accountId);
+            const secondaryGid = Number(msg.gid) || 0;
+            const secondaryName = String(msg.accountName || worker.name || '');
+            const { getPrimaryAccountId: _getPrimaryAccId } = require('../models/store');
+            const primaryAccountId = typeof _getPrimaryAccId === 'function' ? _getPrimaryAccId(secondaryAccountId) : '';
+
+            const sendResponseToSecondary = (payload: any) => {
+                const secondaryWorker = workers[secondaryAccountId];
+                if (secondaryWorker && secondaryWorker.process) {
+                    secondaryWorker.process.send({ type: 'cross_account_steal_response', ...payload });
+                }
+            };
+
+            if (!primaryAccountId) {
+                sendResponseToSecondary({ ok: false, reason: 'no_primary', stolen: 0 });
+                return;
+            }
+
+            const primaryWorker = workers[primaryAccountId];
+            if (!primaryWorker || primaryWorker.stopping || primaryWorker.terminalHandled) {
+                log('跨账号偷菜', `主账号 ${primaryAccountId} 未运行，跳过偷`, {
+                    module: 'cross_steal', event: '跨账号偷菜', result: 'primary_offline',
+                    secondaryAccountId, secondaryGid, primaryAccountId,
+                });
+                sendResponseToSecondary({ ok: false, reason: 'primary_offline', stolen: 0 });
+                return;
+            }
+
+            if (!secondaryGid) {
+                sendResponseToSecondary({ ok: false, reason: 'invalid_gid', stolen: 0 });
+                return;
+            }
+
+            log('跨账号偷菜', `通知主账号 ${primaryAccountId} 偷取 ${secondaryName}(${secondaryAccountId}) 的作物`, {
+                module: 'cross_steal', event: '跨账号偷菜', result: 'request_sent',
+                secondaryAccountId, secondaryGid, primaryAccountId,
+            });
+
+            callWorkerApi(primaryAccountId, 'stealFromAccount', secondaryGid, secondaryName)
+                .then((result: any) => {
+                    const stolen = Number(result && result.stolen) || 0;
+                    log('跨账号偷菜', `主账号偷取 ${secondaryName} 完成，偷取 ${stolen} 块`, {
+                        module: 'cross_steal', event: '跨账号偷菜', result: 'ok',
+                        secondaryAccountId, secondaryGid, primaryAccountId, stolen,
+                    });
+                    sendResponseToSecondary({ ok: true, stolen, reason: '' });
+                })
+                .catch((e: any) => {
+                    log('跨账号偷菜', `主账号偷取 ${secondaryName} 失败: ${e.message}`, {
+                        module: 'cross_steal', event: '跨账号偷菜', result: 'error',
+                        secondaryAccountId, secondaryGid, primaryAccountId, error: e.message,
+                    });
+                    sendResponseToSecondary({ ok: false, reason: e.message || 'steal_failed', stolen: 0 });
+                });
         }
     }
 

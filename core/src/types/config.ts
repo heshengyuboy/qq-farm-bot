@@ -73,6 +73,8 @@ export interface AccountConfig {
   fertilizerBuyCheckIntervalMinutes: number;
   bagSeedPriority: number[];
   bagSeedFallbackStrategy: BagSeedFallbackStrategy;
+  bagSeedExcludeIds: number[];
+  primaryAccountId: string;
 }
 
 export interface OfflineReminder {
@@ -105,6 +107,7 @@ export interface SystemConfig {
   platform: string;
   os: string;
   deviceInfo: DeviceInfo;
+  publicBaseUrl: string;
 }
 
 export interface Announcement {

@@ -190,6 +190,8 @@ function createDataProvider(options: DataProviderOptions) {
                 'fertilizerBuyCheckIntervalMinutes',
                 'bagSeedPriority',
                 'bagSeedFallbackStrategy',
+                'bagSeedExcludeIds',
+                'primaryAccountId',
             ]) {
                 copyIfPresent(key);
             }
