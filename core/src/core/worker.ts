@@ -18,6 +18,7 @@ const { performDailyMonthCardGift, getMonthCardDailyState } = require('../servic
 const { performDailyVipGift, getVipDailyState } = require('../services/qqvip');
 const { createScheduler, getSchedulerRegistrySnapshot } = require('../services/scheduler');
 const { checkDailyShareStatus, getShareDailyState } = require('../services/share');
+const { refreshActivityWindows } = require('../services/activity-windows');
 const { setInitialValues, resetSessionGains, recordOperation, initStatsWithPersistence, saveStats } = require('../services/stats');
 const { initStatusBar, setStatusPlatform, statusData } = require('../services/status');
 const { setRecordGoldExpHook } = require('../services/status');
@@ -25,7 +26,7 @@ const { cleanupTaskSystem, checkAndClaimTasks, getTaskClaimDailyState, getTaskDa
 const { sellAllFruits, getBag, getBagItems, openFertilizerGiftPacksSilently } = require('../services/warehouse');
 const { connect, cleanup, getWs, getUserState, networkEvents } = require('../utils/network');
 const { loadProto } = require('../utils/proto');
-const { setLogHook, log, toNum } = require('../utils/utils');
+const { setLogHook, log, logWarn, toNum } = require('../utils/utils');
 
 // Extend CONFIG with help/steal interval properties used by this worker
 interface WorkerRuntimeConfig {
@@ -613,6 +614,13 @@ async function startBot(config: any): Promise<void> {
             }
         };
         networkEvents.on('farmHarvested', onFarmHarvested);
+
+        try {
+            await refreshActivityWindows();
+        } catch (e: any) {
+            logWarn('仓库', `活动时间初始化失败: ${e?.message || e}`);
+        }
+        if (!canContinueLogin()) return;
 
         // 登录后主动拉一次背包，初始化点券(ID:1002)数量
         try {

@@ -1,6 +1,6 @@
 # 神秘商人、游戏商城与购买协议
 
-抓包目录：`C:\Users\liyp\Downloads\协议`（2026-08-05）。网关外层统一是
+本文结论基于 2026-08-14 的复核样本。抓包目录由解码脚本参数传入。网关外层统一是
 `gatepb.Message`：`meta` 描述 service/method，`body` 是业务 protobuf。客户端
 请求 body 使用 `core/src/utils/tsdk.wasm` 的 TSDK `ba` 变换，服务端响应在抓包中
 已经是明文 protobuf；不要对响应再次调用 TSDK 解密。
@@ -16,11 +16,16 @@
 | `active_time` | int64 | 活动开始 Unix 秒；抓包为 `2026-08-05 16:27:15`（东八区）。 |
 | `expire_time` | int64 | 活动结束 Unix 秒；抓包为次日同一时刻。 |
 
-`ActiveNPC` 的 `npc_id`、`reward_item_id`、`reward_count`、`stock_count` 分别对应
-商人实例、出售物品、每份数量和库存；`currency_item_id` 是货币物品 ID（抓包为
-1001=金币），`price` 是现价，`discount_percent` 和 `original_price` 是折扣展示所需的
-百分比和原价。字段 8 在协议中保留，不能发送。物品 301101 在资源目录中存在对应图片，
-因此字段 2/3 可确定为奖励物品及每份数量；库存周期仍需更多不同商人样本校验。
+`ActiveNPC` 的 `npc_id` 和 `reward_item_id` 分别对应商人实例与出售物品。字段 3 的
+真实含义尚未确认，暂命名为 `unknown_field_3`，不能作为商品数量使用；字段 4
+`reward_count` 才是本次交易获得的商品总量。`currency_item_id` 是货币物品 ID，
+`price` 和 `original_price` 分别是折后单价与原始单价，整批价格需要乘以
+`reward_count`。`discount_percent` 是价格百分比，例如 60 表示 6 折。字段 8 在协议中
+保留，不能发送。
+
+2026-08-14 的样本为艾草种子：字段 3 为 2、`reward_count` 为 8、折后单价 6000、
+原始单价 10000、`discount_percent` 为 60。对应游戏展示为 `x8`、原价 80000、
+6 折、优惠价 48000，确认字段 4 才是数量字段。
 
 ## 游戏商城列表
 
@@ -67,7 +72,7 @@
 可复现解码：
 
 ```text
-node tools/decode-shop-protocols.js "C:\Users\liyp\Downloads\协议"
+pnpm -C core exec node ../tools/decode-shop-protocols.js "D:\path\to\captures"
 ```
 
 每行输出中的 `roundtrip: true` 表示“解码后重新编码”的字节与抓包业务 body 完全一致，

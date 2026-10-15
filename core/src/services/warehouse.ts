@@ -1,3 +1,5 @@
+import type { SellConditionContext } from '../config/sell-conditions';
+
 export {};
 /**
  * 仓库系统 - 自动出售果实
@@ -7,7 +9,8 @@ const { getFruitName, getPlantByFruitId, getPlantBySeedId, getItemById, getItemI
 const { isAutomationOn } = require('../models/store');
 const { sendMsgAsync, networkEvents, getUserState } = require('../utils/network');
 const { types } = require('../utils/proto');
-const { toLong, toNum, log, logWarn, sleep } = require('../utils/utils');
+const { toLong, toNum, toTimeSec, log, logWarn, sleep } = require('../utils/utils');
+const { getSellConditionContext } = require('./activity-windows');
 const { updateStatusGold } = require('./status');
 
 const SELL_BATCH_SIZE: number = 15;
@@ -61,13 +64,20 @@ function toSellItem(item: any): any {
 async function sellItems(items: any[]): Promise<any> {
     const requested: any[] = Array.isArray(items) ? items : [];
     if (requested.length === 0) throw new Error('没有可出售的物品');
+    const baseContext: SellConditionContext = await getSellConditionContext();
+    let bagItems: any[] | null = null;
     for (const item of requested) {
         const id: number = toNum(item && item.id);
         const count: number = toNum(item && item.count);
-        const sellInfo: any = getEffectiveSellInfo(id);
         if (id <= 0 || count <= 0) throw new Error('出售物品参数无效');
+        const info: any = getItemById(id);
+        let expireTime: number = getItemExpireTime(item);
+        if (hasExpireSellCondition(info)) {
+            if (!bagItems) bagItems = getBagItems(await getBag());
+            expireTime = getItemExpireTime(findBagItem(bagItems, item));
+        }
+        const sellInfo: any = getEffectiveSellInfo(info, { ...baseContext, expireTime });
         if (!sellInfo.sellable) {
-            const info: any = getItemById(id);
             throw new Error(`${info?.name || `物品${id}`}当前不可出售`);
         }
     }
@@ -131,6 +141,25 @@ function getBagItems(bagReply: any): any[] {
         return bagReply.item_bag.items;
     }
     return bagReply && bagReply.items ? bagReply.items : [];
+}
+
+function getItemExpireTime(item: any): number {
+    if (!item) return 0;
+    return toTimeSec(item.expire_time ?? item.expireTime);
+}
+
+function hasExpireSellCondition(info: any): boolean {
+    return String(info?.sell_cond || '')
+        .split(';')
+        .some((condition) => condition.trim().startsWith('道具过期后:'));
+}
+
+function findBagItem(items: any[], requested: any): any | null {
+    const id = toNum(requested?.id);
+    const uid = toNum(requested?.uid);
+    return (items || []).find((item: any) => (
+        toNum(item?.id) === id && (uid <= 0 || toNum(item?.uid) === uid)
+    )) || null;
 }
 
 function getMutantTypes(item: any): number[] {
@@ -339,6 +368,7 @@ async function getCurrentTotalsFromBag(): Promise<{ gold: number | null; exp: nu
 async function getBagDetail(): Promise<any> {
     const bagReply: any = await getBag();
     const rawItems: any[] = getBagItems(bagReply);
+    const baseContext: SellConditionContext = await getSellConditionContext();
 
     // Balance/container entries have no UID and are not real bag stacks. Keep
     // them separate so status widgets can consume them without displaying them.
@@ -363,7 +393,7 @@ async function getBagDetail(): Promise<any> {
         const uid: number = toNum(it.uid);
         if (id <= 0 || count <= 0 || uid <= 0) continue;
         const mutantTypes: number[] = getMutantTypes(it);
-        originalItems.push({ id, count, uid, mutantTypes, groupKey: `uid:${uid}` });
+        originalItems.push({ id, count, uid, expireTime: getItemExpireTime(it), mutantTypes, groupKey: `uid:${uid}` });
     }
 
     // UID is the authoritative identity of a concrete bag stack.
@@ -394,7 +424,8 @@ async function getBagDetail(): Promise<any> {
         }
         if (!name) name = `物品${id}`;
         const interactionType: string = info && info.interaction_type ? String(info.interaction_type) : '';
-        const sellInfo: any = getEffectiveSellInfo(info);
+        const expireTime: number = getItemExpireTime(it);
+        const sellInfo: any = getEffectiveSellInfo(info, { ...baseContext, expireTime });
         const sellsList: any[] = sellInfo.sells;
         const priceId: number = sellsList.length > 0 ? sellsList[0].currencyId : 0;
         const priceUnit: string = priceId === 1005 ? '金豆豆' : priceId === 1002 ? '点券' : '金';
@@ -467,13 +498,15 @@ async function sellAllFruits(): Promise<void> {
     try {
         const bagReply: any = await getBag();
         const items: any[] = getBagItems(bagReply);
+        const baseContext: SellConditionContext = await getSellConditionContext();
 
         const toSell: any[] = [];
         const names: string[] = [];
         for (const item of items) {
             const id: number = toNum(item.id);
             const count: number = toNum(item.count);
-            if (isFruitItemId(id) && count > 0 && getEffectiveSellInfo(id).sellable) {
+            const expireTime: number = getItemExpireTime(item);
+            if (isFruitItemId(id) && count > 0 && getEffectiveSellInfo(id, { ...baseContext, expireTime }).sellable) {
                 toSell.push(item);
                 names.push(`${getFruitName(id)}x${count}`);
             }

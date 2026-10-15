@@ -1,3 +1,5 @@
+import type { SellConditionContext } from './sell-conditions';
+
 export {};
 /**
  * 游戏配置数据模块
@@ -7,6 +9,7 @@ export {};
 const fs = require('node:fs');
 const path = require('node:path');
 const { getResourcePath } = require('./runtime-paths');
+const { isSellConditionSatisfied } = require('./sell-conditions');
 
 interface RoleLevelItem {
     level: number;
@@ -341,8 +344,11 @@ interface EffectiveSellInfo {
     sells: { currencyId: number; price: number }[];
 }
 
-/** Resolve the directly available price without guessing dynamic game conditions. */
-function getEffectiveSellInfo(itemOrId: ItemInfo | number | null | undefined): EffectiveSellInfo {
+/** Resolve prices whose normal or explicitly confirmed conditional sale is available. */
+function getEffectiveSellInfo(
+    itemOrId: ItemInfo | number | null | undefined,
+    context?: SellConditionContext
+): EffectiveSellInfo {
     const item: ItemInfo | undefined = typeof itemOrId === 'number'
         ? getItemById(itemOrId)
         : (itemOrId || undefined);
@@ -352,6 +358,10 @@ function getEffectiveSellInfo(itemOrId: ItemInfo | number | null | undefined): E
     const condition = item.sell_cond ? String(item.sell_cond).trim() : '';
     const conditionalSells = parseSells(item.cond_sells).filter(sell => sell.currencyId > 0 && sell.price > 0);
 
+    if (condition && conditionalSells.length > 0 && context
+        && isSellConditionSatisfied(condition, context)) {
+        return { sellable: true, status: 'available', condition, sells: conditionalSells };
+    }
     if (normalSells.length > 0) {
         return { sellable: true, status: 'available', condition: condition || null, sells: normalSells };
     }

@@ -7,7 +7,10 @@ const LongModule = require('long');
 const { sendMsgAsync, GatewayError } = require('../utils/network');
 const { types } = require('../utils/proto');
 const { getItemById, getItemImageById } = require('../config/gameConfig');
+const { getServerTimeSec } = require('../utils/utils');
 const { getBag, getBagItems } = require('./warehouse');
+const { getActivityWindows } = require('./activity-windows');
+const { buildActivityGameplayBindings, resolveActivityGameplays } = require('./activity-gameplay-registry');
 const { reportActivityShare } = require('./share');
 const {
     mergeConstellationStates,
@@ -814,9 +817,50 @@ function buildActions(season: any, solarTerms: any, constellation: any = null, s
     };
 }
 
+function buildActivityDirectory(windows: any[], season: any, shop: any, solarTerms: any, constellation: any) {
+    const gameplayBindings = buildActivityGameplayBindings({ season, shop, solarTerms, constellation });
+    const groups: any[] = [];
+    for (const window of windows) {
+        const id = String(window?.id || '').trim();
+        if (!id) continue;
+        const name = String(window?.name || '').trim() || `活动 ${id}`;
+        const startTime = Number(window?.beginTime) || 0;
+        const endTime = Number(window?.endTime) || 0;
+        const group = groups.find((entry: any) => (
+            entry.name === name
+            && (entry.endTime <= 0 || startTime <= 0 || entry.endTime >= startTime)
+            && (endTime <= 0 || entry.startTime <= 0 || endTime >= entry.startTime)
+        ));
+        if (group) {
+            group.activityIds.push(id);
+            group.startTime = group.startTime > 0 && startTime > 0 ? Math.min(group.startTime, startTime) : Math.max(group.startTime, startTime);
+            group.endTime = Math.max(group.endTime, endTime);
+            if (!group.id.endsWith('00') && id.endsWith('00')) group.id = id;
+            continue;
+        }
+        groups.push({
+            id,
+            name,
+            startTime,
+            endTime,
+            activityIds: [id],
+        });
+    }
+    return groups.map(group => ({
+        ...group,
+        ...resolveActivityGameplays(group.activityIds, gameplayBindings),
+    }));
+}
+
 async function getActivityCenterSnapshot(shopOverride: any = null) {
     // 星座 type=21 是写操作，读取快照只能使用赛季发现信息和最近一次写操作回包。
-    const [seasonResult, solarResult, qingMeiResult] = await Promise.allSettled([querySeason(), querySolarTerms(), getCurrentQingMeiActivity()]);
+    // 青梅活动已下线；保留独立接口和实现，但不再随活动中心快照自动查询。
+    const [seasonResult, solarResult, activityListResult] = await Promise.allSettled([
+        querySeason(),
+        querySolarTerms(),
+        getActivityWindows(),
+    ]);
+    const qingMeiResult: SettledEntry = { status: 'fulfilled', value: null };
     const rawSeason = settledValue(seasonResult);
     const season = rawSeason ? normalizeSeason(rawSeason) : null;
     const solarTerms = solarResult.status === 'fulfilled' ? normalizeSolarTerms(solarResult.value) : null;
@@ -844,7 +888,10 @@ async function getActivityCenterSnapshot(shopOverride: any = null) {
         )
         : null;
     const actions = buildActions(season, solarTerms, constellation, shop);
+    const activityWindows = settledValue(activityListResult) || [];
     return {
+        serverTime: getServerTimeSec(),
+        activities: buildActivityDirectory(activityWindows, season, shop, solarTerms, constellation),
         season,
         constellation,
         shop,
@@ -862,6 +909,7 @@ async function getActivityCenterSnapshot(shopOverride: any = null) {
             shop: settledError(shopResult),
             solarTerms: settledError(solarResult),
             qingMei: settledError(qingMeiResult),
+            activities: settledError(activityListResult),
         },
     };
 }
